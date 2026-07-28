@@ -2,24 +2,28 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
+/**
+ * Ports `db/seed.sql`: reference data plus one fully worked order.
+ *
+ * Order matters — the worked order references seeded users, addresses, products and a
+ * delivery slot.
+ *
+ * Deliberately *not* using WithoutModelEvents: HasPublicId assigns each row's UUIDv7 from a
+ * `creating` hook, and suppressing model events would leave every seeded row without the
+ * identifier the API addresses it by.
+ */
 class DatabaseSeeder extends Seeder
 {
-    use WithoutModelEvents;
-
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
-        // User::factory(10)->create();
-
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
+        $this->call([
+            UserSeeder::class,
+            CatalogSeeder::class,
+            DeliverySlotSeeder::class,
+            CartSeeder::class,
+            WorkedOrderSeeder::class,
         ]);
     }
 }

@@ -1,13 +1,25 @@
 <?php
 
+use App\Exceptions\ProblemException;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Auth\AuthenticationException;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
+        // The major version lives in the path, per `docs/api-design.md` §10. Within a version
+        // only backwards-compatible changes ship; anything breaking needs /v2.
+        api: __DIR__.'/../routes/api.php',
+        apiPrefix: 'v1',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
@@ -16,6 +28,58 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*'),
+            fn (Request $request) => $request->is('v1/*'),
         );
+
+        // Every error leaves this API as an RFC 9457 problem document. Framework exceptions
+        // are translated here so no individual handler has to remember to do it.
+
+        $exceptions->render(function (ValidationException $e, Request $request) {
+            if (! $request->is('v1/*')) {
+                return null;
+            }
+
+            $errors = [];
+
+            foreach ($e->errors() as $field => $messages) {
+                foreach ($messages as $message) {
+                    $errors[] = ['field' => $field, 'message' => $message];
+                }
+            }
+
+            return ProblemException::validationFailed($errors)->render($request);
+        });
+
+        $exceptions->render(function (AuthenticationException $e, Request $request) {
+            return $request->is('v1/*')
+                ? ProblemException::unauthorized()->render($request)
+                : null;
+        });
+
+        $exceptions->render(function (AuthorizationException|AccessDeniedHttpException $e, Request $request) {
+            return $request->is('v1/*')
+                ? ProblemException::forbidden()->render($request)
+                : null;
+        });
+
+        // A missing route, an unresolvable route binding and someone else's resource all
+        // arrive here, and all three are answered identically on purpose: a 403 would confirm
+        // the resource exists, which is itself a disclosure.
+        $exceptions->render(function (ModelNotFoundException|NotFoundHttpException $e, Request $request) {
+            return $request->is('v1/*')
+                ? ProblemException::notFound()->render($request)
+                : null;
+        });
+
+        $exceptions->render(function (HttpException $e, Request $request) {
+            if (! $request->is('v1/*') || $e->getStatusCode() !== 429) {
+                return null;
+            }
+
+            $headers = $e->getHeaders();
+
+            return ProblemException::rateLimited((int) ($headers['Retry-After'] ?? 60))
+                ->render($request)
+                ->withHeaders($headers);
+        });
     })->create();

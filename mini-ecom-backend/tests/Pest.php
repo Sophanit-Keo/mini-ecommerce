@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -15,8 +16,19 @@ use Tests\TestCase;
 */
 
 pest()->extend(TestCase::class)
- // ->use(RefreshDatabase::class)
+    ->use(RefreshDatabase::class)
     ->in('Feature');
+
+/*
+| tests/Search runs against a truncated database rather than inside a transaction.
+|
+| InnoDB updates its FULLTEXT index when a transaction commits, so rows inserted by a test
+| wrapped in RefreshDatabase's transaction are invisible to MATCH ... AGAINST — the fixtures
+| exist, and the search finds none of them. Truncation commits, so the index is real.
+*/
+pest()->extend(TestCase::class)
+    ->use(DatabaseTruncation::class)
+    ->in('Search');
 
 /*
 |--------------------------------------------------------------------------
