@@ -42,6 +42,12 @@ class RegisterUser
             throw ProblemException::duplicateResource('An account already exists for that email address.');
         }
 
+        // Fired after the response is sent, so a slow mail transport never delays account
+        // creation. This is a side effect of registration, not part of its contract.
+        dispatch(function () use ($user): void {
+            $user->sendEmailVerificationNotification();
+        })->afterResponse();
+
         return $this->issueTokenPair->handle($user, $request);
     }
 }

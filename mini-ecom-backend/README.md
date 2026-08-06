@@ -85,6 +85,8 @@ Custom API config (`config/api.php`, env-driven — not yet listed in `.env.exam
 
 ## API Reference
 
+Full request/response documentation with examples: [docs/API.md](docs/API.md).
+
 All routes are prefixed with `/v1`.
 
 ### Auth (`/v1/auth`)

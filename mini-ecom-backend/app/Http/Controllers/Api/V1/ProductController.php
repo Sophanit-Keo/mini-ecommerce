@@ -6,6 +6,7 @@ use App\Enums\SoldBy;
 use App\Exceptions\ProblemException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ListProductsRequest;
+use App\Http\Requests\UpdateProductRequest;
 use App\Http\Resources\ProductResource;
 use App\Http\Resources\ProductSummaryResource;
 use App\Models\Category;
@@ -15,6 +16,8 @@ use App\Support\SortKey;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Public catalogue. Everything here is keyset-paginated and eager-loaded — a product list is
@@ -96,6 +99,49 @@ class ProductController extends Controller
         }
 
         return ProductResource::make($product);
+    }
+
+    /**
+     * Admin-only. Uses the unfiltered lookup (not `baseQuery()`) so an admin can also
+     * re-activate a product that is currently `is_active = false` — the public catalogue
+     * query hides those on purpose, but the update endpoint would otherwise be unable to
+     * find the very row it needs to flip back on.
+     */
+    public function update(UpdateProductRequest $request, string $productId): ProductResource
+    {
+        $product = Product::query()->wherePublicId($productId)->first();
+
+        if ($product === null) {
+            throw ProblemException::notFound('No such product.');
+        }
+
+        DB::transaction(function () use ($request, $product) {
+            $product->update($request->toAttributes());
+        });
+
+        return ProductResource::make(
+            $product->refresh()->load(['category', 'images' => fn ($images) => $images->orderBy('position')])
+        );
+    }
+
+    /**
+     * Admin-only. Soft delete — `Product` uses `SoftDeletes`, so the row (and its price/sku
+     * history other tables snapshot) is retained; it just drops out of every default query
+     * scope, including the public catalogue. Existing carts referencing it are left alone —
+     * `fk_cart_items_product` is `restrictOnDelete`, but that only guards a hard DELETE, which
+     * this never issues.
+     */
+    public function destroy(string $productId): Response
+    {
+        $product = Product::query()->wherePublicId($productId)->first();
+
+        if ($product === null) {
+            throw ProblemException::notFound('No such product.');
+        }
+
+        $product->delete();
+
+        return response()->noContent();
     }
 
     /**

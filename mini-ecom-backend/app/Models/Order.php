@@ -6,8 +6,10 @@ use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Models\Concerns\HasPublicId;
+use App\Observers\OrderObserver;
 use Database\Factories\OrderFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -19,7 +21,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * `*_estimated` is computed from average weights and authorises payment; `*_final` is
  * computed after picking from actual scale readings and captures it. `*_final` stays null
  * until the order reaches `packed` — null means "not yet picked", not zero.
+ *
+ * `#[ObservedBy(OrderObserver::class)]` records an in-app notification for the customer on
+ * every status change, regardless of which code path made the change (customer cancel, an
+ * admin action, a future bot) — see OrderObserver.
  */
+#[ObservedBy(OrderObserver::class)]
 #[Fillable([
     'order_number', 'user_id', 'delivery_address_id', 'delivery_address_snapshot',
     'delivery_slot_id', 'status', 'payment_status', 'payment_method', 'currency',

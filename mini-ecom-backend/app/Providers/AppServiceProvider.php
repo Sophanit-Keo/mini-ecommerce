@@ -2,10 +2,13 @@
 
 namespace App\Providers;
 
+use App\Models\User;
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
@@ -31,6 +34,40 @@ class AppServiceProvider extends ServiceProvider
 
         $this->configureRateLimiters();
         $this->configurePasswordPolicy();
+        $this->configureAuthNotificationUrls();
+    }
+
+    /**
+     * This is a pure JSON API with no Blade views to click through to, so the stock password
+     * reset notification's default URL (a named web route that doesn't exist here) is
+     * replaced with a link into whatever client actually renders a page — a SPA or mobile app
+     * reading `API_FRONTEND_URL`. The client extracts the token back out of the query string
+     * and posts it to `/v1/auth/password/reset`.
+     *
+     * Email verification has no equivalent override: it is a typed-in 6-digit code, not a
+     * link, sent by `App\Notifications\EmailVerificationCodeNotification` — see
+     * `User::sendEmailVerificationNotification()`.
+     */
+    private function configureAuthNotificationUrls(): void
+    {
+        $buildUrl = function (User $user, string $token): string {
+            $query = http_build_query(['token' => $token, 'email' => $user->email]);
+
+            return rtrim((string) config('api.frontend_url'), '/')."/reset-password?{$query}";
+        };
+
+        ResetPassword::createUrlUsing($buildUrl);
+
+        // Overrides the stock notification's plain-text mail body with the branded template
+        // shared by `EmailVerificationCodeNotification`.
+        ResetPassword::toMailUsing(function (User $user, string $token) use ($buildUrl): MailMessage {
+            return (new MailMessage)
+                ->subject('Reset your '.config('app.name').' password')
+                ->view('emails.reset-password', [
+                    'url' => $buildUrl($user, $token),
+                    'count' => (int) config('auth.passwords.users.expire'),
+                ]);
+        });
     }
 
     /**

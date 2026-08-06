@@ -1,0 +1,1213 @@
+openapi: 3.0.3
+info:
+  title: Grocerly API
+  description: >
+    REST API for a grocery-delivery style e-commerce platform.
+    See docs/API.md for narrative documentation with usage examples.
+  version: "1.0.0"
+servers:
+  - url: /v1
+tags:
+  - name: Auth
+  - name: Categories
+  - name: Products
+  - name: Addresses
+  - name: Cart
+  - name: Wishlist
+  - name: Orders
+  - name: Admin
+  - name: Notifications
+
+security: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, fullName]
+              properties:
+                email: { type: string, format: email, maxLength: 255 }
+                password: { type: string, maxLength: 128 }
+                fullName: { type: string, minLength: 1, maxLength: 120 }
+                phone: { type: string, maxLength: 32, nullable: true }
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "401": { $ref: "#/components/responses/InvalidCredentials" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate a refresh token for a new access/refresh token pair
+      description: >
+        The refresh token itself is the credential; no Authorization header is required.
+        Reusing an already-rotated refresh token revokes the entire token chain.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke a refresh token
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "204": { description: Logged out }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the authenticated user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/password/forgot:
+    post:
+      tags: [Auth]
+      summary: Request a password reset link
+      description: >
+        Always answers 202 with the same generic body, whether or not the address has an
+        account — this endpoint is unauthenticated and exists solely to answer "does this
+        email have an account", so a differing response would be an enumeration oracle.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email, maxLength: 255 }
+      responses:
+        "202":
+          description: A reset link has been sent, if the account exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/password/reset:
+    post:
+      tags: [Auth]
+      summary: Reset a password using a broker token
+      description: >
+        Also revokes every refresh token and access token already issued to the account,
+        forcing every other session to re-authenticate.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, token, password]
+              properties:
+                email: { type: string, format: email, maxLength: 255 }
+                token: { type: string }
+                password: { type: string, maxLength: 128 }
+      responses:
+        "204": { description: Password reset }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/email/verification-notification:
+    post:
+      tags: [Auth]
+      summary: Resend the email verification code
+      description: >
+        Emails a fresh 6-digit code, replacing any previously issued one. The code expires
+        after 10 minutes.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Already verified — nothing was sent }
+        "202": { description: A new verification code was sent }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/email/verify:
+    post:
+      tags: [Auth]
+      summary: Verify an email address
+      description: >
+        Checks the submitted code against the code most recently issued to the
+        authenticated caller. The code is single-use and expires after 10 minutes.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, pattern: "^[0-9]{6}$" }
+      responses:
+        "200":
+          description: Email verified
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /categories:
+    get:
+      tags: [Categories]
+      summary: List categories
+      security: []
+      parameters:
+        - name: tree
+          in: query
+          schema: { type: boolean }
+          description: Return nested children instead of a flat list.
+      responses:
+        "200":
+          description: Category list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Category" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /categories/{categoryId}:
+    get:
+      tags: [Categories]
+      summary: Get a single category
+      security: []
+      parameters:
+        - name: categoryId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Category
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /products:
+    get:
+      tags: [Products]
+      summary: Search and list products (cursor-paginated)
+      security: []
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 100 }
+          description: Full-text search query.
+        - name: categoryId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: inStock
+          in: query
+          schema: { type: boolean }
+        - name: soldBy
+          in: query
+          schema: { type: string, enum: [unit, weight] }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [relevance, price_asc, price_desc, newest]
+            default: relevance
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque cursor from a previous response's page.nextCursor.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 24 }
+      responses:
+        "200":
+          description: Product page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProductSummary" }
+                  page: { $ref: "#/components/schemas/CursorPageInfo" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /products/{productId}:
+    get:
+      tags: [Products]
+      summary: Get a single product
+      security: []
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Product
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    patch:
+      tags: [Products]
+      summary: Update a product (admin only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductPatch" }
+      responses:
+        "200":
+          description: Updated product
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [Products]
+      summary: Soft-delete a product (admin only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /products/{productId}/substitutes:
+    get:
+      tags: [Products]
+      summary: Get ranked substitute products (same category, in-stock, price-proximity)
+      security: []
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 20, default: 5 }
+      responses:
+        "200":
+          description: Substitute products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProductSummary" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /addresses:
+    get:
+      tags: [Addresses]
+      summary: List the authenticated user's addresses
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Address list, default first then newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Address" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Addresses]
+      summary: Create an address
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddressWrite" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Address" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /addresses/{addressId}:
+    get:
+      tags: [Addresses]
+      summary: Get one address
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: addressId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Address
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Address" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Addresses]
+      summary: Partially update an address
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: addressId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddressWrite" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Address" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Addresses]
+      summary: Delete (soft-delete) an address
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: addressId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /cart:
+    get:
+      tags: [Cart]
+      summary: Get (or lazily create) the caller's active cart
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The active cart with its items
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Cart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /cart/items:
+    post:
+      tags: [Cart]
+      summary: Add a product to the cart, or increase its quantity if already present
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CartItemWrite" }
+      responses:
+        "201":
+          description: Created or updated line
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CartItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /cart/items/{cartItemId}:
+    patch:
+      tags: [Cart]
+      summary: Update a cart line's quantity, substitution preference, or note
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: cartItemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CartItemWrite" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CartItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [Cart]
+      summary: Remove a cart line
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: cartItemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /wishlist:
+    get:
+      tags: [Wishlist]
+      summary: List the authenticated user's wishlist items, newest first
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Wishlist item list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/WishlistItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /wishlist/items:
+    post:
+      tags: [Wishlist]
+      summary: Save a product to the wishlist
+      description: >
+        Idempotent: saving a product already on the wishlist returns the existing item with
+        200 rather than a 409 conflict.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WishlistItemWrite" }
+      responses:
+        "200":
+          description: Already saved; existing item returned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WishlistItem" }
+        "201":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WishlistItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /wishlist/items/{wishlistItemId}:
+    delete:
+      tags: [Wishlist]
+      summary: Remove a product from the wishlist
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: wishlistItemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /orders:
+    get:
+      tags: [Orders]
+      summary: List the authenticated user's orders, newest first
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: perPage
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Order page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Order" }
+                  page:
+                    type: object
+                    properties:
+                      currentPage: { type: integer }
+                      lastPage: { type: integer }
+                      total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Orders]
+      summary: Place an order from the caller's active cart
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderPlacement" }
+      responses:
+        "201":
+          description: Order created (or, on a replayed idempotencyKey, the order already created)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Get a single order, with items and status history
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /orders/{orderId}/cancel:
+    post:
+      tags: [Orders]
+      summary: Cancel an order (customer-initiated)
+      description: Only allowed while the order is `pending_payment` or `confirmed`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cancellationReason]
+              properties:
+                cancellationReason: { type: string, maxLength: 280 }
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/telegram/link:
+    post:
+      tags: [Admin]
+      summary: Link the calling admin's Telegram chat id to receive order notifications
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chatId]
+              properties:
+                chatId: { type: string, maxLength: 32 }
+      responses:
+        "200":
+          description: Linked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  telegramChatId: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/orders/{orderId}/advance:
+    post:
+      tags: [Admin]
+      summary: Step an order through the admin fulfilment flow (confirm/prepare/deliver/complete/reject)
+      description: >
+        Mirrors the actions available on the Telegram bot's inline buttons — both call the
+        same underlying transition table. Deliberately skips the `packed` status.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [confirm, prepare, deliver, complete, reject, cancel] }
+                reason: { type: string, maxLength: 280, nullable: true }
+      responses:
+        "200":
+          description: Updated order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /telegram/webhook:
+    post:
+      tags: [Admin]
+      summary: Telegram bot webhook (not a client-facing endpoint)
+      description: >
+        Receives `callback_query` updates from Telegram's inline order-action buttons.
+        Unauthenticated (Telegram cannot send a Bearer token); verified instead via the
+        `X-Telegram-Bot-Api-Secret-Token` header against `TELEGRAM_WEBHOOK_SECRET`.
+      security: []
+      responses:
+        "204": { description: Processed (Telegram does not need a body back) }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List the authenticated user's notifications, newest first
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unreadOnly
+          in: query
+          schema: { type: boolean, default: false }
+        - name: perPage
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Notification page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Notification" }
+                  page:
+                    type: object
+                    properties:
+                      currentPage: { type: integer }
+                      lastPage: { type: integer }
+                      total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /notifications/{notificationId}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark a single notification as read
+      description: Idempotent — marking an already-read notification succeeds without error.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Marked read
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Notification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark every unread notification belonging to the caller as read
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: All marked read }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "Sanctum access token"
+
+  responses:
+    ValidationError:
+      description: Validation failed
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Missing, invalid, or expired access token
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    InvalidCredentials:
+      description: Email or password incorrect
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Resource not found (or not owned by the caller)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Authenticated, but the caller's role does not permit this operation
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    BadRequest:
+      description: Malformed request (e.g. invalid cursor, empty cart at checkout)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description: Valid but conflicts with current state (e.g. full delivery slot, invalid status transition)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 problem details
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+        retryAfter: { type: integer }
+      required: [type, title, status]
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        phone: { type: string, nullable: true }
+        role: { type: string, enum: [customer, admin] }
+
+    AuthTokens:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        expiresIn: { type: integer, description: "Access token TTL in seconds" }
+        tokenType: { type: string, enum: [Bearer] }
+        user: { $ref: "#/components/schemas/User" }
+
+    Category:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        parentId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        imageUrl: { type: string, nullable: true }
+        position: { type: integer }
+        productCount: { type: integer }
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/Category" }
+
+    ProductImage:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        altText: { type: string, nullable: true }
+        position: { type: integer }
+        isPrimary: { type: boolean }
+
+    ProductSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        brand: { type: string, nullable: true }
+        soldBy: { type: string, enum: [unit, weight] }
+        unitLabel: { type: string }
+        effectivePrice: { type: string, description: "Decimal as string" }
+        price: { type: string, nullable: true }
+        pricePerKg: { type: string, nullable: true }
+        compareAtPrice: { type: string, nullable: true }
+        averageWeightKg: { type: string, nullable: true }
+        primaryImageUrl: { type: string, nullable: true }
+        inStock: { type: boolean }
+        categoryId: { type: string, format: uuid }
+
+    Product:
+      allOf:
+        - $ref: "#/components/schemas/ProductSummary"
+        - type: object
+          properties:
+            description: { type: string, nullable: true }
+            weightTolerancePct: { type: string, nullable: true }
+            minOrderQuantity: { type: integer }
+            maxOrderQuantity: { type: integer, nullable: true }
+            images:
+              type: array
+              items: { $ref: "#/components/schemas/ProductImage" }
+            availableQuantity: { type: integer }
+            category: { $ref: "#/components/schemas/Category" }
+
+    ProductPatch:
+      type: object
+      description: >-
+        Admin-only partial update. All fields optional. `soldBy` and its dependent pricing
+        fields are cross-checked against `ck_products_pricing_shape`: a `unit` product must
+        end up with `price` set and `pricePerKg`/`averageWeightKg` unset, a `weight` product
+        the reverse. `effectivePrice`, `sku`-derived and `slug`-derived generated columns are
+        never accepted.
+      properties:
+        categoryId: { type: string, format: uuid }
+        sku: { type: string, maxLength: 64 }
+        name: { type: string, maxLength: 200 }
+        slug: { type: string, maxLength: 220 }
+        brand: { type: string, nullable: true, maxLength: 120 }
+        description: { type: string, nullable: true }
+        soldBy: { type: string, enum: [unit, weight] }
+        unitLabel: { type: string, maxLength: 16 }
+        price: { type: string, nullable: true }
+        pricePerKg: { type: string, nullable: true }
+        compareAtPrice: { type: string, nullable: true }
+        averageWeightKg: { type: string, nullable: true }
+        weightTolerancePct: { type: string }
+        minOrderQuantity: { type: string }
+        maxOrderQuantity: { type: string, nullable: true }
+        isActive: { type: boolean }
+
+    CursorPageInfo:
+      type: object
+      properties:
+        hasMore: { type: boolean }
+        nextCursor: { type: string, nullable: true }
+
+    Address:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, nullable: true }
+        recipientName: { type: string }
+        phone: { type: string }
+        line1: { type: string }
+        line2: { type: string, nullable: true }
+        city: { type: string }
+        region: { type: string, nullable: true }
+        postalCode: { type: string, nullable: true }
+        countryCode: { type: string, minLength: 2, maxLength: 2 }
+        latitude: { type: string, nullable: true }
+        longitude: { type: string, nullable: true }
+        deliveryNotes: { type: string, nullable: true }
+        isDefault: { type: boolean }
+        createdAt: { type: string, format: date-time }
+
+    AddressWrite:
+      type: object
+      properties:
+        label: { type: string, maxLength: 40, nullable: true }
+        recipientName: { type: string, maxLength: 120 }
+        phone: { type: string, maxLength: 32 }
+        line1: { type: string, maxLength: 180 }
+        line2: { type: string, maxLength: 180, nullable: true }
+        city: { type: string, maxLength: 80 }
+        region: { type: string, maxLength: 80, nullable: true }
+        postalCode: { type: string, maxLength: 20, nullable: true }
+        countryCode: { type: string, minLength: 2, maxLength: 2 }
+        latitude: { type: number, minimum: -90, maximum: 90, nullable: true }
+        longitude: { type: number, minimum: -180, maximum: 180, nullable: true }
+        deliveryNotes: { type: string, maxLength: 500, nullable: true }
+        isDefault: { type: boolean }
+
+    CartItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        product: { $ref: "#/components/schemas/ProductSummary" }
+        quantity: { type: string, description: "Decimal as string" }
+        unitPriceSnapshot: { type: string }
+        lineTotal: { type: string }
+        substitutionPreference: { type: string, enum: [none, similar, contact_me] }
+        note: { type: string, nullable: true }
+
+    CartItemWrite:
+      type: object
+      properties:
+        productId: { type: string, format: uuid, description: "Required on create; ignored on update" }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        substitutionPreference: { type: string, enum: [none, similar, contact_me] }
+        note: { type: string, maxLength: 280, nullable: true }
+
+    Cart:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [active, converted, merged, abandoned] }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CartItem" }
+
+    WishlistItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        product: { $ref: "#/components/schemas/ProductSummary" }
+        createdAt: { type: string, format: date-time }
+
+    WishlistItemWrite:
+      type: object
+      required: [productId]
+      properties:
+        productId: { type: string, format: uuid }
+
+    OrderItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid, nullable: true }
+        productName: { type: string }
+        productSku: { type: string }
+        brand: { type: string, nullable: true }
+        soldBy: { type: string, enum: [unit, weight] }
+        unitLabel: { type: string }
+        unitPrice: { type: string }
+        orderedQuantity: { type: string }
+        estimatedWeightKg: { type: string, nullable: true }
+        estimatedLineTotal: { type: string }
+        pickedQuantity: { type: string, nullable: true }
+        pickedWeightKg: { type: string, nullable: true }
+        finalLineTotal: { type: string, nullable: true }
+        substitutionPreference: { type: string, enum: [none, similar, contact_me] }
+        status: { type: string, enum: [pending, picked, substituted, unavailable] }
+        note: { type: string, nullable: true }
+
+    OrderStatusHistoryEntry:
+      type: object
+      properties:
+        fromStatus: { type: string, nullable: true }
+        toStatus: { type: string }
+        note: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        orderNumber: { type: string }
+        status:
+          type: string
+          enum: [pending_payment, confirmed, picking, packed, out_for_delivery, delivered, cancelled, refunded]
+        paymentStatus: { type: string, enum: [pending, authorized, captured, failed, refunded] }
+        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet] }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        deliveryAddressSnapshot: { type: object }
+        deliverySlotId: { type: string, format: uuid, nullable: true }
+        subtotalEstimated: { type: string }
+        deliveryFee: { type: string }
+        discountTotal: { type: string }
+        taxEstimated: { type: string }
+        totalEstimated: { type: string }
+        subtotalFinal: { type: string, nullable: true }
+        taxFinal: { type: string, nullable: true }
+        totalFinal: { type: string, nullable: true }
+        customerNote: { type: string, nullable: true }
+        placedAt: { type: string, format: date-time }
+        confirmedAt: { type: string, format: date-time, nullable: true }
+        deliveredAt: { type: string, format: date-time, nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancellationReason: { type: string, nullable: true }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/OrderItem" }
+        statusHistory:
+          type: array
+          items: { $ref: "#/components/schemas/OrderStatusHistoryEntry" }
+
+    OrderPlacement:
+      type: object
+      required: [addressId, deliverySlotId, paymentMethod, idempotencyKey]
+      properties:
+        addressId: { type: string, format: uuid }
+        deliverySlotId: { type: string, format: uuid }
+        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet] }
+        customerNote: { type: string, maxLength: 500, nullable: true }
+        idempotencyKey: { type: string, maxLength: 64 }
+
+    Notification:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, example: order_status_changed }
+        data:
+          type: object
+          description: >
+            Shape depends on `type`. For `order_status_changed`: orderId, orderNumber,
+            fromStatus, toStatus, message.
+          additionalProperties: true
+        readAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }

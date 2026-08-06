@@ -46,4 +46,19 @@ return [
         'catalog' => (int) env('API_RATE_LIMIT_CATALOG', 60),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Frontend URL
+    |--------------------------------------------------------------------------
+    |
+    | This API has no Blade views of its own — password-reset and email-verification
+    | notifications link out to whatever client actually renders a page for the
+    | customer to act on. There is no frontend in this repository yet, so this
+    | defaults to a placeholder; a real client sets API_FRONTEND_URL and reads the
+    | token/id/hash back out of the query string once the user lands there.
+    |
+    */
+
+    'frontend_url' => env('API_FRONTEND_URL', 'http://localhost:3000'),
+
 ];

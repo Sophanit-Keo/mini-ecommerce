@@ -1,9 +1,16 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AddressController;
+use App\Http\Controllers\Api\V1\AdminOrderController;
+use App\Http\Controllers\Api\V1\AdminTelegramController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\CartController;
 use App\Http\Controllers\Api\V1\CategoryController;
+use App\Http\Controllers\Api\V1\NotificationController;
+use App\Http\Controllers\Api\V1\OrderController;
 use App\Http\Controllers\Api\V1\ProductController;
+use App\Http\Controllers\Api\V1\TelegramWebhookController;
+use App\Http\Controllers\Api\V1\WishlistController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -24,9 +31,20 @@ Route::prefix('auth')->group(function () {
     // Unauthenticated: the caller's access token has usually expired by the time they refresh.
     Route::post('refresh', [AuthController::class, 'refresh']);
 
+    // Both are unauthenticated and abuse/enumeration-prone, so they share the auth limiter.
+    Route::post('password/forgot', [AuthController::class, 'forgotPassword'])->middleware('throttle:auth');
+    Route::post('password/reset', [AuthController::class, 'resetPassword'])->middleware('throttle:auth');
+
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
+        Route::post('email/verification-notification', [AuthController::class, 'sendEmailVerification'])->middleware('throttle:auth');
+
+        // A 6-digit code is guessable in ~1M attempts, so this must be checked against a
+        // specific, already-authenticated user rather than looked up by an arbitrary
+        // identifier from the request body — see VerifyUserEmail. The `throttle:auth` limiter
+        // (5/min by IP) keeps repeated wrong-code guesses meaningfully rate-limited.
+        Route::post('email/verify', [AuthController::class, 'verifyEmail'])->middleware('throttle:auth');
     });
 });
 
@@ -45,4 +63,35 @@ Route::middleware(['auth:sanctum', 'throttle:authenticated'])->group(function ()
     Route::get('addresses/{addressId}', [AddressController::class, 'show']);
     Route::patch('addresses/{addressId}', [AddressController::class, 'update']);
     Route::delete('addresses/{addressId}', [AddressController::class, 'destroy']);
+
+    Route::get('cart', [CartController::class, 'show']);
+    Route::post('cart/items', [CartController::class, 'storeItem']);
+    Route::patch('cart/items/{cartItemId}', [CartController::class, 'updateItem']);
+    Route::delete('cart/items/{cartItemId}', [CartController::class, 'destroyItem']);
+
+    Route::get('wishlist', [WishlistController::class, 'index']);
+    Route::post('wishlist/items', [WishlistController::class, 'storeItem']);
+    Route::delete('wishlist/items/{wishlistItemId}', [WishlistController::class, 'destroyItem']);
+
+    Route::get('orders', [OrderController::class, 'index']);
+    Route::post('orders', [OrderController::class, 'store']);
+    Route::get('orders/{orderId}', [OrderController::class, 'show']);
+    Route::post('orders/{orderId}/cancel', [OrderController::class, 'cancel']);
+
+    Route::get('notifications', [NotificationController::class, 'index']);
+    Route::post('notifications/{notificationId}/read', [NotificationController::class, 'markRead']);
+    Route::post('notifications/read-all', [NotificationController::class, 'markAllRead']);
 });
+
+// Admin-only catalogue management and order fulfilment.
+Route::middleware(['auth:sanctum', 'admin', 'throttle:authenticated'])->group(function () {
+    Route::patch('products/{productId}', [ProductController::class, 'update']);
+    Route::delete('products/{productId}', [ProductController::class, 'destroy']);
+
+    Route::post('admin/telegram/link', [AdminTelegramController::class, 'link']);
+    Route::post('admin/orders/{orderId}/advance', [AdminOrderController::class, 'advance']);
+});
+
+// Telegram webhook — unauthenticated (Telegram cannot send a Bearer token). Authenticity is
+// verified via the X-Telegram-Bot-Api-Secret-Token header instead, inside the controller.
+Route::post('telegram/webhook', [TelegramWebhookController::class, 'handle']);
