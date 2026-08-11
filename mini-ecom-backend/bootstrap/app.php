@@ -14,7 +14,7 @@ use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
-return Application::configure(basePath: dirname(__DIR__))
+$app = Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
         // The major version lives in the path, per `docs/api-design.md` §10. Within a version
@@ -86,3 +86,19 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->withHeaders($headers);
         });
     })->create();
+
+// Vercel's serverless filesystem is read-only everywhere except /tmp — Blade still needs
+// somewhere to write compiled view templates regardless of which cache/session driver is
+// configured, so the whole storage path is redirected there. VERCEL is set automatically by
+// the platform; this is a no-op everywhere else (a plain VPS/Laravel Cloud deploy).
+if (getenv('VERCEL')) {
+    $storagePath = '/tmp/storage';
+
+    foreach (['framework/views', 'framework/cache/data', 'framework/sessions', 'framework/testing', 'logs', 'app/public'] as $dir) {
+        @mkdir("{$storagePath}/{$dir}", recursive: true);
+    }
+
+    $app->useStoragePath($storagePath);
+}
+
+return $app;
