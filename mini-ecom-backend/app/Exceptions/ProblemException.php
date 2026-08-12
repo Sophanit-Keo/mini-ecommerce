@@ -299,6 +299,22 @@ class ProblemException extends RuntimeException
         );
     }
 
+    /**
+     * Card and wallet orders must receive an authoritative provider event before a staff member
+     * can make them operational. This is deliberately a separate type from an order-state error:
+     * a retry should happen after payment authorization, not after an arbitrary status change.
+     */
+    public static function paymentNotAuthorized(string $paymentStatus): self
+    {
+        return new self(
+            'payment-not-authorized',
+            'Payment has not been authorized',
+            409,
+            'This card or wallet order cannot be confirmed until payment is authorized or captured.',
+            ['paymentStatus' => $paymentStatus],
+        );
+    }
+
     public static function itemsUnresolved(int $pendingCount): self
     {
         return new self(

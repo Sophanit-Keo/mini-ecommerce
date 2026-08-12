@@ -24,7 +24,7 @@ class OrderResource extends JsonResource
             'paymentMethod' => $this->payment_method->value,
             'currency' => $this->currency,
             'deliveryAddressSnapshot' => $this->delivery_address_snapshot,
-            'deliverySlotId' => $this->whenLoaded('deliverySlot', fn () => $this->deliverySlot?->public_id),
+            'deliverySlotId' => $this->relationLoaded('deliverySlot') ? $this->deliverySlot?->public_id : null,
             'subtotalEstimated' => $this->subtotal_estimated,
             'deliveryFee' => $this->delivery_fee,
             'discountTotal' => $this->discount_total,

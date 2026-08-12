@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Orders\ManageOrderReservation;
 use App\Actions\Orders\PlaceOrder;
 use App\Enums\CartStatus;
 use App\Enums\OrderStatus;
@@ -33,7 +34,10 @@ class OrderController extends Controller
 
     private const MAX_PER_PAGE = 100;
 
-    public function __construct(private readonly PlaceOrder $placeOrder) {}
+    public function __construct(
+        private readonly PlaceOrder $placeOrder,
+        private readonly ManageOrderReservation $reservations,
+    ) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -43,6 +47,7 @@ class OrderController extends Controller
         $perPage = min(max((int) $request->query('perPage', self::DEFAULT_PER_PAGE), 1), self::MAX_PER_PAGE);
 
         $orders = $request->user()->orders()
+            ->with('deliverySlot')
             ->orderByDesc('placed_at')
             ->paginate($perPage);
 
@@ -59,7 +64,7 @@ class OrderController extends Controller
     public function show(Request $request, string $orderId): OrderResource
     {
         return OrderResource::make(
-            $this->findForUser($request, $orderId, ['items', 'statusHistory' => fn ($query) => $query->orderBy('created_at')])
+            $this->findForUser($request, $orderId, ['deliverySlot', 'items', 'statusHistory' => fn ($query) => $query->orderBy('created_at')])
         );
     }
 
@@ -73,7 +78,7 @@ class OrderController extends Controller
         $existing = Order::where('user_id', $user->id)->where('idempotency_key', $idempotencyKey)->first();
 
         if ($existing !== null) {
-            return OrderResource::make($existing->load(['items', 'statusHistory']))
+            return OrderResource::make($existing->load(['deliverySlot', 'items', 'statusHistory']))
                 ->response()
                 ->setStatusCode(Response::HTTP_CREATED);
         }
@@ -110,7 +115,7 @@ class OrderController extends Controller
             customerNote: $request->input('customerNote'),
         );
 
-        return OrderResource::make($order->load(['items', 'statusHistory']))
+        return OrderResource::make($order->load(['deliverySlot', 'items', 'statusHistory']))
             ->response()
             ->setStatusCode(Response::HTTP_CREATED);
     }
@@ -118,29 +123,37 @@ class OrderController extends Controller
     public function cancel(CancelOrderRequest $request, string $orderId): OrderResource
     {
         $order = $this->findForUser($request, $orderId);
+        $reason = $request->string('cancellationReason')->toString();
 
-        if (! in_array($order->status, self::CANCELLABLE_STATUSES, true)) {
-            throw ProblemException::invalidStatusTransition($order->status->value, OrderStatus::Cancelled->value);
-        }
+        $cancelled = DB::transaction(function () use ($request, $order, $reason): Order {
+            // Re-read under lock so cancellation cannot race an admin advance or the expiry
+            // sweep. The status transition and exact-once release share this transaction.
+            $lockedOrder = Order::query()->lockForUpdate()->findOrFail($order->id);
 
-        $fromStatus = $order->status;
+            if (! in_array($lockedOrder->status, self::CANCELLABLE_STATUSES, true)) {
+                throw ProblemException::invalidStatusTransition($lockedOrder->status->value, OrderStatus::Cancelled->value);
+            }
 
-        DB::transaction(function () use ($request, $order, $fromStatus) {
-            $order->update([
+            $fromStatus = $lockedOrder->status;
+            $this->reservations->release($lockedOrder, $request->user()->id);
+
+            $lockedOrder->update([
                 'status' => OrderStatus::Cancelled,
                 'cancelled_at' => now(),
-                'cancellation_reason' => $request->string('cancellationReason')->toString(),
+                'cancellation_reason' => $reason,
             ]);
 
-            $order->statusHistory()->create([
+            $lockedOrder->statusHistory()->create([
                 'from_status' => $fromStatus,
                 'to_status' => OrderStatus::Cancelled,
                 'changed_by' => $request->user()->id,
-                'note' => $request->string('cancellationReason')->toString(),
+                'note' => $reason,
             ]);
+
+            return $lockedOrder;
         });
 
-        return OrderResource::make($order->refresh()->load(['items', 'statusHistory']));
+        return OrderResource::make($cancelled->load(['deliverySlot', 'items', 'statusHistory']));
     }
 
     /**

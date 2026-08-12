@@ -6,6 +6,7 @@ use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\DeliverySlot;
 use App\Models\Inventory;
+use App\Models\InventoryAdjustment;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\User;
@@ -77,8 +78,20 @@ test('linking a telegram chat id requires authentication', function () {
 // JSON API order advancement
 // ---------------------------------------------------------------------------
 
-test('an admin confirms a pending order', function () {
+test('an admin cannot confirm a card order with pending payment', function () {
     $order = Order::factory()->pendingPayment()->create();
+
+    $this->actingAs($this->admin, 'sanctum')
+        ->postJson('/v1/admin/orders/'.$order->public_id.'/advance', ['action' => 'confirm'])
+        ->assertStatus(409)
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/payment-not-authorized')
+        ->assertJsonPath('paymentStatus', 'pending');
+
+    expect($order->fresh()->status)->toBe(OrderStatus::PendingPayment);
+});
+
+test('an admin confirms an authorized card order', function () {
+    $order = Order::factory()->pendingPayment()->create(['payment_status' => 'authorized']);
 
     $this->actingAs($this->admin, 'sanctum')
         ->postJson('/v1/admin/orders/'.$order->public_id.'/advance', ['action' => 'confirm'])
@@ -88,6 +101,17 @@ test('an admin confirms a pending order', function () {
     expect($order->fresh()->status)->toBe(OrderStatus::Confirmed)
         ->and($order->fresh()->confirmed_at)->not->toBeNull()
         ->and($order->fresh()->statusHistory()->latest('id')->first()->changed_by)->toBe($this->admin->id);
+});
+
+test('an admin can confirm a cash-on-delivery order without processor authorization', function () {
+    $order = Order::factory()->pendingPayment()->create(['payment_method' => 'cash_on_delivery']);
+
+    $this->actingAs($this->admin, 'sanctum')
+        ->postJson('/v1/admin/orders/'.$order->public_id.'/advance', ['action' => 'confirm'])
+        ->assertOk()
+        ->assertJsonPath('status', 'confirmed');
+
+    expect($order->fresh()->status)->toBe(OrderStatus::Confirmed);
 });
 
 test('an admin steps an order through prepare, deliver and complete', function () {
@@ -117,6 +141,35 @@ test('an admin rejects an order with a reason', function () {
         ])->assertOk()->assertJsonPath('status', 'cancelled');
 
     expect($order->fresh()->cancellation_reason)->toBe('Out of stock');
+});
+
+test('admin rejection releases a checked-out order resources in the same transaction', function () {
+    $cart = fulfilmentCartWithOneItem($this->customer);
+    $address = Address::factory()->for($this->customer)->create();
+    $slot = DeliverySlot::factory()->create();
+
+    $this->actingAs($this->customer, 'sanctum')
+        ->postJson('/v1/orders', fulfilmentCheckoutPayload([
+            'addressId' => $address->public_id,
+            'deliverySlotId' => $slot->public_id,
+        ]))
+        ->assertCreated();
+
+    $order = Order::sole();
+    $inventory = Inventory::findOrFail($cart->items()->value('product_id'));
+
+    $this->actingAs($this->admin, 'sanctum')
+        ->postJson('/v1/admin/orders/'.$order->public_id.'/advance', [
+            'action' => 'reject',
+            'reason' => 'Item recalled',
+        ])
+        ->assertOk()
+        ->assertJsonPath('status', 'cancelled');
+
+    expect($slot->fresh()->booked_count)->toBe(0)
+        ->and($inventory->fresh()->quantity_reserved)->toBe('0.000')
+        ->and($order->fresh()->reservation_expires_at)->toBeNull()
+        ->and(InventoryAdjustment::where('reference_id', $order->id)->where('reason', 'order_released')->count())->toBe(1);
 });
 
 test('an illegal jump is rejected as a conflict', function () {
@@ -175,11 +228,11 @@ test('the webhook rejects a request with the wrong secret header', function () {
         ->assertForbidden();
 });
 
-test('the webhook advances an order for a linked admin', function () {
+test('the webhook advances an authorized order for a linked admin', function () {
     Http::fake();
     config(['services.telegram.webhook_secret' => 'expected-secret']);
     $this->admin->update(['telegram_chat_id' => '555']);
-    $order = Order::factory()->pendingPayment()->create();
+    $order = Order::factory()->pendingPayment()->create(['payment_status' => 'authorized']);
 
     $this->withHeader('X-Telegram-Bot-Api-Secret-Token', 'expected-secret')
         ->postJson('/v1/telegram/webhook', telegramCallback('555', "order:{$order->public_id}:confirm"))

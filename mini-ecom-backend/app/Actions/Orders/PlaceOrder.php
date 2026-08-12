@@ -31,7 +31,10 @@ use Illuminate\Support\Str;
  */
 class PlaceOrder
 {
-    public function __construct(private readonly TelegramOrderNotifier $telegramOrderNotifier) {}
+    public function __construct(
+        private readonly TelegramOrderNotifier $telegramOrderNotifier,
+        private readonly ManageOrderReservation $reservations,
+    ) {}
 
     public function handle(
         User $user,
@@ -58,16 +61,6 @@ class PlaceOrder
 
         try {
             $order = DB::transaction(function () use ($user, $cart, $address, $slot, $paymentMethod, $idempotencyKey, $customerNote) {
-                // Atomic increment-and-bounds-check: zero affected rows means the slot filled
-                // between the read above and this write, not a read-then-write race.
-                $booked = DeliverySlot::where('id', $slot->id)
-                    ->where('booked_count', '<', $slot->capacity)
-                    ->increment('booked_count');
-
-                if ($booked === 0) {
-                    throw ProblemException::slotUnavailable($slot->public_id);
-                }
-
                 $lines = $cart->items->map(fn ($item) => $this->priceLine($item));
 
                 $subtotal = Money::sum($lines->pluck('estimated_line_total'));
@@ -100,6 +93,11 @@ class PlaceOrder
                 foreach ($lines as $line) {
                     $order->items()->create($line);
                 }
+
+                // Re-read and lock live inventory plus delivery capacity only after the order
+                // and immutable line snapshots exist. The action either reserves every resource
+                // and writes its ledger rows, or throws and rolls back the complete checkout.
+                $this->reservations->reserve($order, $user->id);
 
                 $order->statusHistory()->create([
                     'from_status' => null,

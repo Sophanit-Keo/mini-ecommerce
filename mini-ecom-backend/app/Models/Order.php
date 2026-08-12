@@ -32,7 +32,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'delivery_slot_id', 'status', 'payment_status', 'payment_method', 'currency',
     'subtotal_estimated', 'delivery_fee', 'discount_total', 'tax_estimated', 'total_estimated',
     'subtotal_final', 'tax_final', 'total_final', 'authorized_amount', 'captured_amount',
-    'customer_note', 'idempotency_key', 'reservation_expires_at',
+    'customer_note', 'idempotency_key', 'reservation_expires_at', 'resources_reserved_at',
     'placed_at', 'confirmed_at', 'delivered_at', 'cancelled_at', 'cancellation_reason',
 ])]
 class Order extends Model
@@ -100,6 +100,7 @@ class Order extends Model
             'captured_amount' => 'decimal:2',
             'placed_at' => 'datetime',
             'reservation_expires_at' => 'datetime',
+            'resources_reserved_at' => 'datetime',
             'confirmed_at' => 'datetime',
             'delivered_at' => 'datetime',
             'cancelled_at' => 'datetime',

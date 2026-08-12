@@ -3,6 +3,8 @@
 namespace App\Actions\Orders;
 
 use App\Enums\OrderStatus;
+use App\Enums\PaymentMethod;
+use App\Enums\PaymentStatus;
 use App\Exceptions\ProblemException;
 use App\Models\Order;
 use App\Models\User;
@@ -21,6 +23,8 @@ use Illuminate\Support\Facades\DB;
 class AdvanceOrderStatus
 {
     public const DEFAULT_REJECTION_NOTE = 'Rejected by admin via Telegram.';
+
+    public function __construct(private readonly ManageOrderReservation $reservations) {}
 
     /**
      * @var array<string, array{from: array<int, OrderStatus>, to: OrderStatus}>
@@ -67,6 +71,17 @@ class AdvanceOrderStatus
             }
 
             $toStatus = $transition['to'];
+
+            // Cash-on-delivery follows an explicit operational policy: staff may confirm it
+            // without a processor authorization. Card and wallet orders must first be updated
+            // by a verified provider event to `authorized` or `captured`; no client/admin route
+            // can skip that financial boundary.
+            if ($verb === 'confirm'
+                && $lockedOrder->payment_method !== PaymentMethod::CashOnDelivery
+                && ! in_array($lockedOrder->payment_status, [PaymentStatus::Authorized, PaymentStatus::Captured], true)) {
+                throw ProblemException::paymentNotAuthorized($lockedOrder->payment_status->value);
+            }
+
             $attributes = ['status' => $toStatus];
 
             if ($toStatus === OrderStatus::Confirmed) {
@@ -76,6 +91,12 @@ class AdvanceOrderStatus
             } elseif ($toStatus === OrderStatus::Cancelled) {
                 $attributes['cancelled_at'] = now();
                 $attributes['cancellation_reason'] = $reason ?? self::DEFAULT_REJECTION_NOTE;
+            }
+
+            if ($toStatus === OrderStatus::Cancelled) {
+                // Rejection is terminal for a pre-dispatch order: return its slot and every
+                // reserved quantity in the same transaction as its status-history entry.
+                $this->reservations->release($lockedOrder, $admin->id);
             }
 
             $lockedOrder->update($attributes);

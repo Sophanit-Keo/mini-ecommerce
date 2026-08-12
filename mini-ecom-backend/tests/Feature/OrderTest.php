@@ -7,6 +7,7 @@ use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\DeliverySlot;
 use App\Models\Inventory;
+use App\Models\InventoryAdjustment;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderStatusHistory;
@@ -63,6 +64,7 @@ test('checkout creates an order from the active cart, snapshots the address and 
     $response->assertCreated()
         ->assertJsonPath('status', 'pending_payment')
         ->assertJsonPath('paymentStatus', 'pending')
+        ->assertJsonPath('deliverySlotId', $slot->public_id)
         ->assertJsonPath('deliveryAddressSnapshot.city', 'San Francisco')
         ->assertJsonPath('subtotalEstimated', '10.00')
         ->assertJsonPath('deliveryFee', '3.99')
@@ -71,8 +73,14 @@ test('checkout creates an order from the active cart, snapshots the address and 
         ->assertJsonCount(1, 'statusHistory')
         ->assertJsonPath('statusHistory.0.toStatus', 'pending_payment');
 
+    $order = Order::sole();
+    $inventory = Inventory::findOrFail($cart->items()->value('product_id'));
+
     expect($cart->fresh()->status)->toBe(CartStatus::Converted)
         ->and($slot->fresh()->booked_count)->toBe(1)
+        ->and($inventory->fresh()->quantity_reserved)->toBe('2.000')
+        ->and($order->resources_reserved_at)->not->toBeNull()
+        ->and(InventoryAdjustment::where('reference_id', $order->id)->where('reason', 'order_reserved')->count())->toBe(1)
         ->and(Order::count())->toBe(1);
 });
 
@@ -119,6 +127,25 @@ test('idempotency keys are scoped to the customer who supplied them', function (
         ->and($firstCart->fresh()->status)->toBe(CartStatus::Converted)
         ->and($secondCart->fresh()->status)->toBe(CartStatus::Converted)
         ->and(Order::where('idempotency_key', $key)->count())->toBe(2);
+});
+
+test('checkout rejects stock that was consumed after the cart was built', function () {
+    $cart = cartWithOneItem($this->user);
+    $address = Address::factory()->for($this->user)->create();
+    $slot = DeliverySlot::factory()->create();
+    $inventory = Inventory::findOrFail($cart->items()->value('product_id'));
+    $inventory->update(['quantity_on_hand' => 1]);
+
+    $this->postJson('/v1/orders', checkoutPayload([
+        'addressId' => $address->public_id,
+        'deliverySlotId' => $slot->public_id,
+    ]))->assertUnprocessable()
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/insufficient-stock');
+
+    expect(Order::count())->toBe(0)
+        ->and($cart->fresh()->status)->toBe(CartStatus::Active)
+        ->and($slot->fresh()->booked_count)->toBe(0)
+        ->and($inventory->fresh()->quantity_reserved)->toBe('0.000');
 });
 
 test('checkout rejects an empty cart', function () {
@@ -215,10 +242,9 @@ test('order detail eager-loads items and status history without N+1', function (
     $queries = count(DB::getQueryLog());
     DB::disableQueryLog();
 
-    // The one extra query is the deliberate fresh account-status read in `account.active`.
-    // The order itself, its items, and its history still use a fixed three-query eager-load
-    // shape rather than issuing one query per item or status row.
-    expect($queries)->toBeLessThanOrEqual(4);
+    // Fixed queries: fresh account status, order, delivery slot, items, and history. The graph
+    // remains eager-loaded rather than issuing one query per item/status row.
+    expect($queries)->toBeLessThanOrEqual(5);
 });
 
 test('another customer order is indistinguishable from one that does not exist', function () {
@@ -241,6 +267,30 @@ test('a pending payment order is cancelled by its owner', function () {
 
     expect($order->fresh()->status)->toBe(OrderStatus::Cancelled)
         ->and($order->fresh()->statusHistory()->latest('id')->first()->to_status)->toBe(OrderStatus::Cancelled);
+});
+
+test('cancelling a checked-out order releases its inventory and delivery capacity exactly once', function () {
+    $cart = cartWithOneItem($this->user);
+    $address = Address::factory()->for($this->user)->create();
+    $slot = DeliverySlot::factory()->create();
+
+    $created = $this->postJson('/v1/orders', checkoutPayload([
+        'addressId' => $address->public_id,
+        'deliverySlotId' => $slot->public_id,
+    ]))->assertCreated();
+
+    $order = Order::wherePublicId($created->json('id'))->firstOrFail();
+    $inventory = Inventory::findOrFail($cart->items()->value('product_id'));
+
+    $this->postJson('/v1/orders/'.$order->public_id.'/cancel', ['cancellationReason' => 'Changed my mind'])
+        ->assertOk()
+        ->assertJsonPath('status', 'cancelled');
+
+    expect($slot->fresh()->booked_count)->toBe(0)
+        ->and($inventory->fresh()->quantity_reserved)->toBe('0.000')
+        ->and($order->fresh()->reservation_expires_at)->toBeNull()
+        ->and(InventoryAdjustment::where('reference_id', $order->id)->where('reason', 'order_reserved')->count())->toBe(1)
+        ->and(InventoryAdjustment::where('reference_id', $order->id)->where('reason', 'order_released')->count())->toBe(1);
 });
 
 test('an already delivered order cannot be cancelled', function () {
