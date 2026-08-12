@@ -1,7 +1,9 @@
 <?php
 
+use App\Actions\Checkout\CreateCheckoutQuote;
 use App\Enums\CartStatus;
 use App\Enums\OrderStatus;
+use App\Enums\PaymentMethod;
 use App\Models\Address;
 use App\Models\Cart;
 use App\Models\CartItem;
@@ -41,10 +43,26 @@ function checkoutPayload(array $overrides = []): array
         'addressId' => $overrides['addressId'] ?? null,
         'deliverySlotId' => $overrides['deliverySlotId'] ?? null,
         'paymentMethod' => 'card',
+        'quoteToken' => 'test-quote-token',
         'customerNote' => 'Leave at the door',
         'idempotencyKey' => (string) Str::uuid7(),
         ...$overrides,
     ];
+}
+
+function quotedCheckoutPayload(User $user, Address $address, DeliverySlot $slot, array $overrides = []): array
+{
+    $paymentMethod = PaymentMethod::from($overrides['paymentMethod'] ?? 'card');
+    $cart = $user->carts()->where('status', CartStatus::Active)->with('items.product.inventory')->firstOrFail();
+    $quote = app(CreateCheckoutQuote::class)->create($user, $cart, $address, $slot->fresh(), $paymentMethod);
+
+    return checkoutPayload([
+        'addressId' => $address->public_id,
+        'deliverySlotId' => $slot->public_id,
+        'paymentMethod' => $paymentMethod->value,
+        'quoteToken' => $quote['quoteToken'],
+        ...$overrides,
+    ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -56,10 +74,7 @@ test('checkout creates an order from the active cart, snapshots the address and 
     $address = Address::factory()->for($this->user)->create(['city' => 'San Francisco']);
     $slot = DeliverySlot::factory()->create(['fee' => 3.99]);
 
-    $response = $this->postJson('/v1/orders', checkoutPayload([
-        'addressId' => $address->public_id,
-        'deliverySlotId' => $slot->public_id,
-    ]));
+    $response = $this->postJson('/v1/orders', quotedCheckoutPayload($this->user, $address, $slot));
 
     $response->assertCreated()
         ->assertJsonPath('status', 'pending_payment')
@@ -89,7 +104,7 @@ test('checkout is idempotent on the idempotency key', function () {
     $address = Address::factory()->for($this->user)->create();
     $slot = DeliverySlot::factory()->create();
 
-    $payload = checkoutPayload(['addressId' => $address->public_id, 'deliverySlotId' => $slot->public_id]);
+    $payload = quotedCheckoutPayload($this->user, $address, $slot);
 
     $first = $this->postJson('/v1/orders', $payload)->assertCreated();
     $second = $this->postJson('/v1/orders', $payload)->assertCreated();
@@ -106,9 +121,7 @@ test('idempotency keys are scoped to the customer who supplied them', function (
     $firstCart = cartWithOneItem($this->user);
     $firstAddress = Address::factory()->for($this->user)->create();
     $slot = DeliverySlot::factory()->create();
-    $first = $this->postJson('/v1/orders', checkoutPayload([
-        'addressId' => $firstAddress->public_id,
-        'deliverySlotId' => $slot->public_id,
+    $first = $this->postJson('/v1/orders', quotedCheckoutPayload($this->user, $firstAddress, $slot, [
         'idempotencyKey' => $key,
     ]))->assertCreated();
 
@@ -117,9 +130,7 @@ test('idempotency keys are scoped to the customer who supplied them', function (
     $this->actingAs($this->otherCustomer, 'sanctum');
     $secondCart = cartWithOneItem($this->otherCustomer);
     $secondAddress = Address::factory()->for($this->otherCustomer)->create();
-    $second = $this->postJson('/v1/orders', checkoutPayload([
-        'addressId' => $secondAddress->public_id,
-        'deliverySlotId' => $slot->public_id,
+    $second = $this->postJson('/v1/orders', quotedCheckoutPayload($this->otherCustomer, $secondAddress, $slot, [
         'idempotencyKey' => $key,
     ]))->assertCreated();
 
@@ -134,13 +145,11 @@ test('checkout rejects stock that was consumed after the cart was built', functi
     $address = Address::factory()->for($this->user)->create();
     $slot = DeliverySlot::factory()->create();
     $inventory = Inventory::findOrFail($cart->items()->value('product_id'));
+    $payload = quotedCheckoutPayload($this->user, $address, $slot);
     $inventory->update(['quantity_on_hand' => 1]);
 
-    $this->postJson('/v1/orders', checkoutPayload([
-        'addressId' => $address->public_id,
-        'deliverySlotId' => $slot->public_id,
-    ]))->assertUnprocessable()
-        ->assertJsonPath('type', 'https://api.grocerly.example/problems/insufficient-stock');
+    $this->postJson('/v1/orders', $payload)->assertStatus(409)
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/stale-checkout-quote');
 
     expect(Order::count())->toBe(0)
         ->and($cart->fresh()->status)->toBe(CartStatus::Active)
@@ -148,49 +157,53 @@ test('checkout rejects stock that was consumed after the cart was built', functi
         ->and($inventory->fresh()->quantity_reserved)->toBe('0.000');
 });
 
-test('checkout rejects an empty cart', function () {
+test('checkout quote rejects an empty cart', function () {
     Cart::factory()->for($this->user)->create();
     $address = Address::factory()->for($this->user)->create();
     $slot = DeliverySlot::factory()->create();
 
-    $this->postJson('/v1/orders', checkoutPayload([
+    $this->postJson('/v1/checkout/quote', [
         'addressId' => $address->public_id,
         'deliverySlotId' => $slot->public_id,
-    ]))->assertStatus(400);
+        'paymentMethod' => 'card',
+    ])->assertStatus(400);
 });
 
-test('checkout rejects a full delivery slot', function () {
+test('checkout quote rejects a full delivery slot', function () {
     cartWithOneItem($this->user);
     $address = Address::factory()->for($this->user)->create();
     $slot = DeliverySlot::factory()->full()->create();
 
-    $this->postJson('/v1/orders', checkoutPayload([
+    $this->postJson('/v1/checkout/quote', [
         'addressId' => $address->public_id,
         'deliverySlotId' => $slot->public_id,
-    ]))->assertStatus(409)
+        'paymentMethod' => 'card',
+    ])->assertStatus(409)
         ->assertJsonPath('type', 'https://api.grocerly.example/problems/slot-unavailable');
 });
 
-test('checkout rejects an inactive delivery slot', function () {
+test('checkout quote rejects an inactive delivery slot', function () {
     cartWithOneItem($this->user);
     $address = Address::factory()->for($this->user)->create();
     $slot = DeliverySlot::factory()->inactive()->create();
 
-    $this->postJson('/v1/orders', checkoutPayload([
+    $this->postJson('/v1/checkout/quote', [
         'addressId' => $address->public_id,
         'deliverySlotId' => $slot->public_id,
-    ]))->assertStatus(409);
+        'paymentMethod' => 'card',
+    ])->assertStatus(409);
 });
 
-test('checkout rejects another customer address', function () {
+test('checkout quote rejects another customer address', function () {
     cartWithOneItem($this->user);
     $theirAddress = Address::factory()->for($this->otherCustomer)->create();
     $slot = DeliverySlot::factory()->create();
 
-    $this->postJson('/v1/orders', checkoutPayload([
+    $this->postJson('/v1/checkout/quote', [
         'addressId' => $theirAddress->public_id,
         'deliverySlotId' => $slot->public_id,
-    ]))->assertNotFound();
+        'paymentMethod' => 'card',
+    ])->assertNotFound();
 });
 
 test('checkout requires a valid payment method', function () {
@@ -242,9 +255,9 @@ test('order detail eager-loads items and status history without N+1', function (
     $queries = count(DB::getQueryLog());
     DB::disableQueryLog();
 
-    // Fixed queries: fresh account status, order, delivery slot, items, and history. The graph
-    // remains eager-loaded rather than issuing one query per item/status row.
-    expect($queries)->toBeLessThanOrEqual(5);
+    // Fixed queries: fresh account status, order, delivery slot, latest payment attempt, items,
+    // and history. The graph remains eager-loaded rather than issuing one query per item/status row.
+    expect($queries)->toBeLessThanOrEqual(6);
 });
 
 test('another customer order is indistinguishable from one that does not exist', function () {
@@ -274,10 +287,7 @@ test('cancelling a checked-out order releases its inventory and delivery capacit
     $address = Address::factory()->for($this->user)->create();
     $slot = DeliverySlot::factory()->create();
 
-    $created = $this->postJson('/v1/orders', checkoutPayload([
-        'addressId' => $address->public_id,
-        'deliverySlotId' => $slot->public_id,
-    ]))->assertCreated();
+    $created = $this->postJson('/v1/orders', quotedCheckoutPayload($this->user, $address, $slot))->assertCreated();
 
     $order = Order::wherePublicId($created->json('id'))->firstOrFail();
     $inventory = Inventory::findOrFail($cart->items()->value('product_id'));

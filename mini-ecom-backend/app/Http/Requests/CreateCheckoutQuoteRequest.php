@@ -6,10 +6,10 @@ use App\Enums\PaymentMethod;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-class PlaceOrderRequest extends FormRequest
+class CreateCheckoutQuoteRequest extends FormRequest
 {
     /**
-     * @return array<string, mixed>
+     * @return array<string, array<int, mixed>>
      */
     public function rules(): array
     {
@@ -17,9 +17,6 @@ class PlaceOrderRequest extends FormRequest
             'addressId' => ['required', 'uuid'],
             'deliverySlotId' => ['required', 'uuid'],
             'paymentMethod' => ['required', Rule::enum(PaymentMethod::class)],
-            'quoteToken' => ['required', 'string', 'max:2048'],
-            'customerNote' => ['nullable', 'string', 'max:500'],
-            'idempotencyKey' => ['required', 'string', 'max:64'],
         ];
     }
 

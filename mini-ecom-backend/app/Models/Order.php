@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * A grocery order has no exact total at checkout.
@@ -33,7 +34,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'subtotal_estimated', 'delivery_fee', 'discount_total', 'tax_estimated', 'total_estimated',
     'subtotal_final', 'tax_final', 'total_final', 'authorized_amount', 'captured_amount',
     'customer_note', 'idempotency_key', 'reservation_expires_at', 'resources_reserved_at',
-    'placed_at', 'confirmed_at', 'delivered_at', 'cancelled_at', 'cancellation_reason',
+    'placed_at', 'confirmed_at', 'delivered_at', 'cancelled_at', 'cart_restored_at', 'cancellation_reason',
 ])]
 class Order extends Model
 {
@@ -70,6 +71,18 @@ class Order extends Model
         return $this->hasMany(OrderStatusHistory::class);
     }
 
+    /** @return HasMany<PaymentAttempt, $this> */
+    public function paymentAttempts(): HasMany
+    {
+        return $this->hasMany(PaymentAttempt::class);
+    }
+
+    /** @return HasOne<PaymentAttempt, $this> */
+    public function latestPaymentAttempt(): HasOne
+    {
+        return $this->hasOne(PaymentAttempt::class)->latestOfMany();
+    }
+
     /**
      * True once picking is complete and the final figures have been written.
      */
@@ -104,6 +117,7 @@ class Order extends Model
             'confirmed_at' => 'datetime',
             'delivered_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'cart_restored_at' => 'datetime',
         ];
     }
 }

@@ -437,18 +437,30 @@ Response `200`: `{ "data": [DeliverySlot, ...] }`, ordered by `startsAt`. A `Del
 
 ## Checkout and orders
 
-Requires `Authorization: Bearer {accessToken}`. Rate limit: `authenticated` (120/min). All operations are scoped to the caller's own orders; a mismatched/missing `orderId` returns `404`, not `403`.
+Requires `Authorization: Bearer {accessToken}`. All operations are scoped to the caller's own orders; a mismatched/missing `orderId` returns `404`, not `403`. Quote/order commands are rate-limited at `checkout` (20/min per user); Bakong payment calls are limited separately at `payment` (12/min per user and route) because verification calls an external provider.
+
+### POST /v1/checkout/quote
+
+Creates a short-lived, **server-authoritative** checkout quote. The client must request a new quote after changing its cart, address, delivery slot, or payment method. The response has no reservation effect; `/v1/orders` rechecks the signed quote and locks live stock/capacity before it creates an order.
+
+Request:
+```json
+{ "addressId": "...", "deliverySlotId": "...", "paymentMethod": "bakong" }
+```
+
+Response `200` contains `quoteToken`, `expiresAt`, `currency`, priced `items`, `subtotal`, `deliveryFee`, `discountTotal`, `tax`, `total`, `paymentMethod`, `deliverySlotId`, and `addressId`. A Bakong quote is only available when the server’s Bakong merchant configuration is complete; no API token or merchant secret is ever returned.
 
 ### POST /v1/orders
 
-Places an order from the caller's active cart.
+Places an order from the caller's active cart using a current server-issued quote.
 
 Request:
 ```json
 {
   "addressId": "...",
   "deliverySlotId": "...",
-  "paymentMethod": "card",
+  "paymentMethod": "bakong",
+  "quoteToken": "server-issued opaque quote token",
   "customerNote": "Leave at the door",
   "idempotencyKey": "a client-generated opaque string, unique per checkout attempt"
 }
@@ -458,7 +470,8 @@ Request:
 |---|---|
 | `addressId` | required, uuid, must belong to the caller |
 | `deliverySlotId` | required, uuid, must refer to a future active slot with capacity; rechecked under lock at checkout |
-| `paymentMethod` | required, enum (`PaymentMethod`) |
+| `paymentMethod` | required, enum (`card`, `cash_on_delivery`, `wallet`, `bakong`) |
+| `quoteToken` | required, max 2048; must be current, unexpired, and bound to this caller/cart/address/slot/payment method |
 | `customerNote` | nullable, max 500 |
 | `idempotencyKey` | required, max 64 |
 
@@ -466,9 +479,9 @@ Replaying the same `idempotencyKey` for the **same caller** returns the order al
 
 The delivery address is copied into `deliveryAddressSnapshot` at placement, so a later edit to the address never rewrites order history. Each cart line is copied into an order item with product name/SKU/brand/pricing snapshotted at checkout. `deliveryFee` comes from the chosen slot; `taxEstimated` and `discountTotal` are `0.00` in the current implementation. Checkout locks the selected slot and every line's live inventory in one transaction, atomically increments `bookedCount`, increments `quantityReserved`, and writes an `order_reserved` inventory ledger entry for each line. If any requested quantity is no longer available, the complete transaction rolls back and the cart remains active. The cart is marked `converted` only after all resources are reserved.
 
-Errors: `400` empty cart, `404` address not owned by caller, `409 slot-unavailable` (full, inactive, past, or nonexistent), `422 insufficient-stock` or validation failure.
+Errors: `400` empty cart, `404` address not owned by caller, `409 stale-checkout-quote` (expired or no longer bound to the current live checkout), `409 slot-unavailable` (full, inactive, past, or nonexistent), `422 insufficient-stock` or validation failure.
 
-Response `201`: an `Order`, including `items` and an initial `statusHistory` entry (`pending_payment`).
+Response `201`: an `Order`, including `items`, an initial `statusHistory` entry (`pending_payment`), and a normalized `payment` object with its method, state, amounts, and (when loaded) the latest safe payment-attempt metadata.
 
 ### GET /v1/orders
 
@@ -477,6 +490,24 @@ Response `200`: `{ "data": [...Order (summary shape, no items/statusHistory)], "
 ### GET /v1/orders/{orderId}
 
 Response `200`: full `Order`, including `items` and `statusHistory` (eager-loaded).
+
+### POST /v1/orders/{orderId}/payments/bakong
+
+Starts the Bakong QR payment for the caller’s `bakong` order. This action is idempotent: while an unexpired attempt exists, and after a payment is verified, it returns the same attempt rather than creating a second QR.
+
+Response `201`: `{ id, provider: "bakong", status, amount, currency, khqrPayload, expiresAt, verifiedAt }`. `khqrPayload` is returned only while the attempt is pending. The provider token, MD5 lookup key, and raw provider response are never exposed.
+
+### POST /v1/orders/{orderId}/payments/bakong/verify
+
+Asks the server to verify the **server-generated** dynamic KHQR MD5 with Bakong. The browser supplies no hash, amount, or success flag. A successful Bakong lookup marks the attempt `verified`, changes the order payment state to `authorized`, records the provider response for audit, and removes the unpaid-reservation timeout. A pending provider response changes nothing.
+
+Response `200`: safe `PaymentAttempt` metadata. Errors include `409 payment-pending`, `409 payment-attempt-expired`, and `502 payment-verification-failed`; none of those errors authorizes or confirms an order.
+
+### POST /v1/orders/{orderId}/restore-cart
+
+Available only for an order cancelled because payment failed or expired. It restores historical lines to the caller’s current active cart only after locking and revalidating each live product and its current inventory. The operation is exact-once: a retry returns the same cart rather than duplicating lines. A delivery slot is deliberately not rebooked; the client must obtain a new quote.
+
+Response `200`: active `Cart`. Errors include `409 invalid-status-transition`, `422 insufficient-stock`, and `400` when a historical product is no longer live.
 
 ### POST /v1/orders/{orderId}/cancel
 
@@ -504,7 +535,7 @@ Response `200`: `{ "telegramChatId": "123456789" }`.
 
 ### POST /v1/admin/orders/{orderId}/advance
 
-Steps an order through a simplified four-stage admin flow: `confirm` (`pending_payment` → `confirmed`), `prepare` (`confirmed` → `picking`), `deliver` (`picking` → `out_for_delivery`), `complete` (`out_for_delivery` → `delivered`). Also accepts `reject`/`cancel` (`pending_payment`, `confirmed`, or `picking` → `cancelled`). This flow deliberately skips the `packed` status — `packed` remains a valid order status but is not exposed as an admin action here. A `card` or `wallet` order may only be confirmed after a server-side payment integration has set `paymentStatus` to `authorized` or `captured`; cash-on-delivery confirmation follows the explicit operational exception.
+Steps an order through a simplified four-stage admin flow: `confirm` (`pending_payment` → `confirmed`), `prepare` (`confirmed` → `picking`), `deliver` (`picking` → `out_for_delivery`), `complete` (`out_for_delivery` → `delivered`). Also accepts `reject`/`cancel` (`pending_payment`, `confirmed`, or `picking` → `cancelled`). This flow deliberately skips the `packed` status — `packed` remains a valid order status but is not exposed as an admin action here. A `card`, `wallet`, or `bakong` order may only be confirmed after a server-side payment integration has set `paymentStatus` to `authorized` or `captured`; cash-on-delivery confirmation follows the explicit operational exception.
 
 Request:
 ```json
@@ -516,7 +547,7 @@ Request:
 | `action` | required, one of `confirm \| prepare \| deliver \| complete \| reject \| cancel` |
 | `reason` | nullable, max 280 |
 
-`404` if no such order exists. An out-of-sequence action (e.g. `deliver` on a `pending_payment` order) is `409 invalid-status-transition`. Confirming a pending card/wallet payment is `409 payment-not-authorized`. Rejecting a reserved order releases delivery capacity and inventory in the same database transaction.
+`404` if no such order exists. An out-of-sequence action (e.g. `deliver` on a `pending_payment` order) is `409 invalid-status-transition`. Confirming a pending card/wallet/Bakong payment is `409 payment-not-authorized`. Rejecting a reserved order releases delivery capacity and inventory in the same database transaction.
 
 Response `200`: updated `Order`, including a new `statusHistory` entry attributed to the acting admin.
 

@@ -133,5 +133,13 @@ class AppServiceProvider extends ServiceProvider
 
         RateLimiter::for('catalog', fn (Request $request) => Limit::perMinute($limits['catalog'])
             ->by('catalog-ip:'.$request->ip()));
+
+        RateLimiter::for('checkout', fn (Request $request) => Limit::perMinute($limits['checkout'])
+            ->by('checkout-user:'.($request->user()?->id ?: $request->ip())));
+
+        // Every verification reaches Bakong over HTTPS. Scope the limiter to the customer and
+        // route rather than only the IP so a botnet cannot turn this into paid/API-token abuse.
+        RateLimiter::for('payment', fn (Request $request) => Limit::perMinute($limits['payment'])
+            ->by('payment-user:'.($request->user()?->id ?: $request->ip()).':'.$request->path()));
     }
 }

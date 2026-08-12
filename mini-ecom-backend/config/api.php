@@ -70,6 +70,11 @@ return [
 
         'authenticated' => (int) env('API_RATE_LIMIT_AUTHENTICATED', 120),
         'catalog' => (int) env('API_RATE_LIMIT_CATALOG', 60),
+
+        // Checkout reserves scarce stock/capacity; payment verification also performs an
+        // outbound provider call. Keep both materially below generic authenticated traffic.
+        'checkout' => (int) env('API_RATE_LIMIT_CHECKOUT', 20),
+        'payment' => (int) env('API_RATE_LIMIT_PAYMENT', 12),
     ],
 
     /*

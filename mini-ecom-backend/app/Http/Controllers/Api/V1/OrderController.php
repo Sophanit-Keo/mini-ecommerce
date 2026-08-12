@@ -2,14 +2,17 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Checkout\CreateCheckoutQuote;
 use App\Actions\Orders\ManageOrderReservation;
 use App\Actions\Orders\PlaceOrder;
+use App\Actions\Orders\RestoreOrderCart;
 use App\Enums\CartStatus;
 use App\Enums\OrderStatus;
 use App\Exceptions\ProblemException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CancelOrderRequest;
 use App\Http\Requests\PlaceOrderRequest;
+use App\Http\Resources\CartResource;
 use App\Http\Resources\OrderResource;
 use App\Models\DeliverySlot;
 use App\Models\Order;
@@ -37,6 +40,8 @@ class OrderController extends Controller
     public function __construct(
         private readonly PlaceOrder $placeOrder,
         private readonly ManageOrderReservation $reservations,
+        private readonly CreateCheckoutQuote $quotes,
+        private readonly RestoreOrderCart $restoreOrderCart,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -47,7 +52,7 @@ class OrderController extends Controller
         $perPage = min(max((int) $request->query('perPage', self::DEFAULT_PER_PAGE), 1), self::MAX_PER_PAGE);
 
         $orders = $request->user()->orders()
-            ->with('deliverySlot')
+            ->with(['deliverySlot', 'latestPaymentAttempt'])
             ->orderByDesc('placed_at')
             ->paginate($perPage);
 
@@ -64,7 +69,7 @@ class OrderController extends Controller
     public function show(Request $request, string $orderId): OrderResource
     {
         return OrderResource::make(
-            $this->findForUser($request, $orderId, ['deliverySlot', 'items', 'statusHistory' => fn ($query) => $query->orderBy('created_at')])
+            $this->findForUser($request, $orderId, ['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory' => fn ($query) => $query->orderBy('created_at')])
         );
     }
 
@@ -78,7 +83,7 @@ class OrderController extends Controller
         $existing = Order::where('user_id', $user->id)->where('idempotency_key', $idempotencyKey)->first();
 
         if ($existing !== null) {
-            return OrderResource::make($existing->load(['deliverySlot', 'items', 'statusHistory']))
+            return OrderResource::make($existing->load(['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory']))
                 ->response()
                 ->setStatusCode(Response::HTTP_CREATED);
         }
@@ -105,6 +110,15 @@ class OrderController extends Controller
             throw ProblemException::badRequest('The cart is empty.');
         }
 
+        $this->quotes->assertCurrent(
+            $request->string('quoteToken')->toString(),
+            $user,
+            $cart,
+            $address,
+            $slot,
+            $request->paymentMethod(),
+        );
+
         $order = $this->placeOrder->handle(
             user: $user,
             cart: $cart,
@@ -115,9 +129,19 @@ class OrderController extends Controller
             customerNote: $request->input('customerNote'),
         );
 
-        return OrderResource::make($order->load(['deliverySlot', 'items', 'statusHistory']))
+        return OrderResource::make($order->load(['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory']))
             ->response()
             ->setStatusCode(Response::HTTP_CREATED);
+    }
+
+    public function restoreCart(Request $request, string $orderId): JsonResponse
+    {
+        $cart = $this->restoreOrderCart->handle(
+            $request->user(),
+            $this->findForUser($request, $orderId),
+        );
+
+        return CartResource::make($cart)->response()->setStatusCode(Response::HTTP_OK);
     }
 
     public function cancel(CancelOrderRequest $request, string $orderId): OrderResource
@@ -153,7 +177,7 @@ class OrderController extends Controller
             return $lockedOrder;
         });
 
-        return OrderResource::make($cancelled->load(['deliverySlot', 'items', 'statusHistory']));
+        return OrderResource::make($cancelled->load(['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory']));
     }
 
     /**
