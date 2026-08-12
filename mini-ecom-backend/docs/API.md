@@ -420,6 +420,21 @@ Response: `204 No Content`. Deleting the underlying product also removes the wis
 
 ---
 
+## Delivery slots
+
+### GET /v1/delivery-slots
+
+Public, rate-limited catalogue discovery for checkout delivery windows. It returns only slots that are active, begin in the future, fall in the requested date range, and still have remaining capacity. This is a discovery response, not a reservation: checkout locks and validates the slot again.
+
+| Query parameter | Rules |
+|---|---|
+| `from` | optional `YYYY-MM-DD`; defaults to today |
+| `to` | optional `YYYY-MM-DD`; defaults to 14 days after `from`; must be on/after `from` and no more than 31 days later |
+
+Response `200`: `{ "data": [DeliverySlot, ...] }`, ordered by `startsAt`. A `DeliverySlot` contains `id`, `startsAt`, `endsAt`, `timezone`, `fee`, `capacity`, `bookedCount`, and `remainingCapacity`.
+
+---
+
 ## Checkout and orders
 
 Requires `Authorization: Bearer {accessToken}`. Rate limit: `authenticated` (120/min). All operations are scoped to the caller's own orders; a mismatched/missing `orderId` returns `404`, not `403`.
@@ -442,22 +457,22 @@ Request:
 | Field | Rules |
 |---|---|
 | `addressId` | required, uuid, must belong to the caller |
-| `deliverySlotId` | required, uuid, must be active and not full |
+| `deliverySlotId` | required, uuid, must refer to a future active slot with capacity; rechecked under lock at checkout |
 | `paymentMethod` | required, enum (`PaymentMethod`) |
 | `customerNote` | nullable, max 500 |
 | `idempotencyKey` | required, max 64 |
 
 Replaying the same `idempotencyKey` for the **same caller** returns the order already created (`201`, same body) rather than erroring or double-booking. The database constraint `uq_orders_user_idempotency_key` closes the race on the pair `(user_id, idempotency_key)`, so an unrelated customer using the same opaque key cannot block another customer's checkout.
 
-The delivery address is copied into `deliveryAddressSnapshot` at placement, so a later edit to the address never rewrites order history. Each cart line is copied into an order item with product name/SKU/brand/pricing snapshotted at checkout. `deliveryFee` comes from the chosen slot; `taxEstimated` and `discountTotal` are `0.00` in the current implementation. The slot's `bookedCount` is incremented atomically and bounded by its capacity — a full slot returns `409 slot-unavailable`. The cart is marked `converted`.
+The delivery address is copied into `deliveryAddressSnapshot` at placement, so a later edit to the address never rewrites order history. Each cart line is copied into an order item with product name/SKU/brand/pricing snapshotted at checkout. `deliveryFee` comes from the chosen slot; `taxEstimated` and `discountTotal` are `0.00` in the current implementation. Checkout locks the selected slot and every line's live inventory in one transaction, atomically increments `bookedCount`, increments `quantityReserved`, and writes an `order_reserved` inventory ledger entry for each line. If any requested quantity is no longer available, the complete transaction rolls back and the cart remains active. The cart is marked `converted` only after all resources are reserved.
 
-Errors: `400` empty cart, `404` address not owned by caller, `409 slot-unavailable` (full, inactive, or nonexistent), `422` validation failure.
+Errors: `400` empty cart, `404` address not owned by caller, `409 slot-unavailable` (full, inactive, past, or nonexistent), `422 insufficient-stock` or validation failure.
 
 Response `201`: an `Order`, including `items` and an initial `statusHistory` entry (`pending_payment`).
 
 ### GET /v1/orders
 
-Response `200`: `{ "data": [...Order (summary shape, no items/statusHistory)], "page": { currentPage, lastPage, total } }`, newest first (`placedAt` descending).
+Response `200`: `{ "data": [...Order (summary shape, no items/statusHistory)], "page": { currentPage, lastPage, total } }`, newest first (`placedAt` descending). Every Order shape always includes `deliverySlotId` (or `null` for legacy/manual rows); list, detail, create, cancellation, and admin responses load it consistently.
 
 ### GET /v1/orders/{orderId}
 
@@ -469,7 +484,7 @@ Customer-initiated cancellation. Only allowed while the order is `pending_paymen
 
 Request: `{ "cancellationReason": "Changed my mind" }`
 
-Sets `status = cancelled`, `cancelledAt` to now, and appends a `statusHistory` entry. Returns `409 invalid-status-transition` if the order is already in a non-cancellable state.
+Sets `status = cancelled`, `cancelledAt` to now, and appends a `statusHistory` entry. For a reserved checkout it atomically returns the delivery capacity and all reserved stock, writing `order_released` ledger entries exactly once. Returns `409 invalid-status-transition` if the order is already in a non-cancellable state.
 
 Response `200`: updated `Order`.
 
@@ -489,7 +504,7 @@ Response `200`: `{ "telegramChatId": "123456789" }`.
 
 ### POST /v1/admin/orders/{orderId}/advance
 
-Steps an order through a simplified four-stage admin flow: `confirm` (`pending_payment` → `confirmed`), `prepare` (`confirmed` → `picking`), `deliver` (`picking` → `out_for_delivery`), `complete` (`out_for_delivery` → `delivered`). Also accepts `reject`/`cancel` (`pending_payment`, `confirmed`, or `picking` → `cancelled`). This flow deliberately skips the `packed` status — `packed` remains a valid order status but is not exposed as an admin action here.
+Steps an order through a simplified four-stage admin flow: `confirm` (`pending_payment` → `confirmed`), `prepare` (`confirmed` → `picking`), `deliver` (`picking` → `out_for_delivery`), `complete` (`out_for_delivery` → `delivered`). Also accepts `reject`/`cancel` (`pending_payment`, `confirmed`, or `picking` → `cancelled`). This flow deliberately skips the `packed` status — `packed` remains a valid order status but is not exposed as an admin action here. A `card` or `wallet` order may only be confirmed after a server-side payment integration has set `paymentStatus` to `authorized` or `captured`; cash-on-delivery confirmation follows the explicit operational exception.
 
 Request:
 ```json
@@ -501,7 +516,7 @@ Request:
 | `action` | required, one of `confirm \| prepare \| deliver \| complete \| reject \| cancel` |
 | `reason` | nullable, max 280 |
 
-`404` if no such order exists. An out-of-sequence action (e.g. `deliver` on a `pending_payment` order) is `409 invalid-status-transition`.
+`404` if no such order exists. An out-of-sequence action (e.g. `deliver` on a `pending_payment` order) is `409 invalid-status-transition`. Confirming a pending card/wallet payment is `409 payment-not-authorized`. Rejecting a reserved order releases delivery capacity and inventory in the same database transaction.
 
 Response `200`: updated `Order`, including a new `statusHistory` entry attributed to the acting admin.
 

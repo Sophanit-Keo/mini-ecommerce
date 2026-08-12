@@ -36,6 +36,6 @@ class AdminOrderController extends Controller
             reason: $request->input('reason'),
         );
 
-        return OrderResource::make($order->load(['items', 'statusHistory']));
+        return OrderResource::make($order->load(['deliverySlot', 'items', 'statusHistory']));
     }
 }

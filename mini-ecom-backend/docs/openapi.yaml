@@ -11,6 +11,7 @@ tags:
   - name: Auth
   - name: Categories
   - name: Products
+  - name: Delivery Slots
   - name: Addresses
   - name: Cart
   - name: Wishlist
@@ -265,6 +266,37 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Category" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /delivery-slots:
+    get:
+      tags: [Delivery Slots]
+      summary: Browse future delivery slots with remaining capacity
+      description: >
+        Returns active future slots in the requested date window. This response is discovery only;
+        POST /orders locks and revalidates the selected slot before reserving it.
+      security: []
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+          description: Inclusive start date. Defaults to today.
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+          description: Inclusive end date. Defaults to 14 days after from; maximum range is 31 days.
+      responses:
+        "200":
+          description: Bookable delivery slots in chronological order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/DeliverySlot" }
+        "422": { $ref: "#/components/responses/ValidationError" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
   /products:
@@ -762,7 +794,9 @@ paths:
       summary: Step an order through the admin fulfilment flow (confirm/prepare/deliver/complete/reject)
       description: >
         Mirrors the actions available on the Telegram bot's inline buttons — both call the
-        same underlying transition table. Deliberately skips the `packed` status.
+        same underlying transition table. Deliberately skips the `packed` status. Card and wallet
+        orders cannot be confirmed until a server-side payment integration has recorded an
+        `authorized` or `captured` payment status; cash-on-delivery is the explicit exception.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: orderId
@@ -1153,6 +1187,19 @@ components:
         toStatus: { type: string }
         note: { type: string, nullable: true }
         createdAt: { type: string, format: date-time }
+
+    DeliverySlot:
+      type: object
+      required: [id, startsAt, endsAt, timezone, fee, capacity, bookedCount, remainingCapacity]
+      properties:
+        id: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        timezone: { type: string, example: UTC }
+        fee: { type: string, example: "3.99" }
+        capacity: { type: integer, minimum: 1 }
+        bookedCount: { type: integer, minimum: 0 }
+        remainingCapacity: { type: integer, minimum: 0 }
 
     Order:
       type: object

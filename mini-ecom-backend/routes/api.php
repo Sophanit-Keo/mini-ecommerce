@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\AdminTelegramController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CartController;
 use App\Http\Controllers\Api\V1\CategoryController;
+use App\Http\Controllers\Api\V1\DeliverySlotController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\OrderController;
 use App\Http\Controllers\Api\V1\ProductController;
@@ -57,6 +58,7 @@ Route::middleware('throttle:catalog')->group(function () {
     Route::get('products', [ProductController::class, 'index']);
     Route::get('products/{productId}', [ProductController::class, 'show']);
     Route::get('products/{productId}/substitutes', [ProductController::class, 'substitutes']);
+    Route::get('delivery-slots', [DeliverySlotController::class, 'index']);
 });
 
 Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])->group(function () {
