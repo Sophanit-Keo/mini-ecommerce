@@ -97,6 +97,15 @@ test('notifications are paginated', function () {
         ->assertJsonPath('page.total', 3);
 });
 
+test('notification page size is clamped to a safe maximum', function () {
+    Notification::factory()->for($this->user)->count(101)->create();
+
+    $this->getJson('/v1/notifications?perPage=1000000')
+        ->assertOk()
+        ->assertJsonCount(100, 'data')
+        ->assertJsonPath('page.total', 101);
+});
+
 // ---------------------------------------------------------------------------
 // Marking read
 // ---------------------------------------------------------------------------

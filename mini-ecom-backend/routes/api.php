@@ -26,25 +26,27 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('auth')->group(function () {
     // Throttled per IP. Registration is limited primarily as an account-enumeration control.
     Route::post('register', [AuthController::class, 'register'])->middleware('throttle:auth');
-    Route::post('login', [AuthController::class, 'login'])->middleware('throttle:auth');
+    // Throttled by both IP and normalized email, closing the distributed password-spray gap
+    // that a per-IP limiter alone cannot address.
+    Route::post('login', [AuthController::class, 'login'])->middleware('throttle:login');
 
     // Unauthenticated: the caller's access token has usually expired by the time they refresh.
-    Route::post('refresh', [AuthController::class, 'refresh']);
+    // It still has its own low IP limit, so random-token floods cannot consume unbounded DB CPU.
+    Route::post('refresh', [AuthController::class, 'refresh'])->middleware('throttle:refresh');
 
     // Both are unauthenticated and abuse/enumeration-prone, so they share the auth limiter.
     Route::post('password/forgot', [AuthController::class, 'forgotPassword'])->middleware('throttle:auth');
     Route::post('password/reset', [AuthController::class, 'resetPassword'])->middleware('throttle:auth');
 
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'account.active'])->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
         Route::post('email/verification-notification', [AuthController::class, 'sendEmailVerification'])->middleware('throttle:auth');
 
-        // A 6-digit code is guessable in ~1M attempts, so this must be checked against a
-        // specific, already-authenticated user rather than looked up by an arbitrary
-        // identifier from the request body — see VerifyUserEmail. The `throttle:auth` limiter
-        // (5/min by IP) keeps repeated wrong-code guesses meaningfully rate-limited.
-        Route::post('email/verify', [AuthController::class, 'verifyEmail'])->middleware('throttle:auth');
+        // A 6-digit code is checked only against the authenticated user's record. The route is
+        // limited by both user and IP; VerifyUserEmail separately burns the code after five
+        // failures, which also stops a distributed-IP guessing attack.
+        Route::post('email/verify', [AuthController::class, 'verifyEmail'])->middleware('throttle:verification');
     });
 });
 
@@ -57,7 +59,7 @@ Route::middleware('throttle:catalog')->group(function () {
     Route::get('products/{productId}/substitutes', [ProductController::class, 'substitutes']);
 });
 
-Route::middleware(['auth:sanctum', 'throttle:authenticated'])->group(function () {
+Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])->group(function () {
     Route::get('addresses', [AddressController::class, 'index']);
     Route::post('addresses', [AddressController::class, 'store']);
     Route::get('addresses/{addressId}', [AddressController::class, 'show']);
@@ -84,7 +86,7 @@ Route::middleware(['auth:sanctum', 'throttle:authenticated'])->group(function ()
 });
 
 // Admin-only catalogue management and order fulfilment.
-Route::middleware(['auth:sanctum', 'admin', 'throttle:authenticated'])->group(function () {
+Route::middleware(['auth:sanctum', 'account.active', 'admin', 'throttle:authenticated'])->group(function () {
     Route::patch('products/{productId}', [ProductController::class, 'update']);
     Route::delete('products/{productId}', [ProductController::class, 'destroy']);
 
@@ -94,4 +96,4 @@ Route::middleware(['auth:sanctum', 'admin', 'throttle:authenticated'])->group(fu
 
 // Telegram webhook — unauthenticated (Telegram cannot send a Bearer token). Authenticity is
 // verified via the X-Telegram-Bot-Api-Secret-Token header instead, inside the controller.
-Route::post('telegram/webhook', [TelegramWebhookController::class, 'handle']);
+Route::post('telegram/webhook', [TelegramWebhookController::class, 'handle'])->middleware('throttle:webhook');

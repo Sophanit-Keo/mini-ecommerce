@@ -22,9 +22,11 @@ use Illuminate\Support\Str;
 /**
  * Turns the caller's active cart into an Order.
  *
- * Checkout is idempotent on `idempotency_key` (`uq_orders_idempotency_key`): a replayed
- * request for the same key returns the order already created rather than erroring or
- * double-charging. The check-then-insert race is closed by the unique index itself, not by
+ * Checkout is idempotent on the pair `(user_id, idempotency_key)`
+ * (`uq_orders_user_idempotency_key`): a replayed request by the same customer returns the order
+ * already created rather than erroring or double-charging. The key is deliberately *not*
+ * global — another customer using the same opaque value is unrelated and must never be able to
+ * block this checkout. The check-then-insert race is closed by the unique index itself, not by
  * application code — a duplicate insert throws and is translated back into the existing row.
  */
 class PlaceOrder
@@ -116,7 +118,7 @@ class PlaceOrder
 
             return $order;
         } catch (QueryException $e) {
-            if (! str_contains($e->getMessage(), 'uq_orders_idempotency_key')) {
+            if (! str_contains($e->getMessage(), 'uq_orders_user_idempotency_key')) {
                 throw $e;
             }
 

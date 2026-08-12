@@ -85,7 +85,10 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
-     * The three scopes from `docs/api-design.md` §11.
+     * Rate limits are keyed to the identity that actually needs protecting, not just the source
+     * address. An IP-only login throttle stops one laptop guessing thousands of accounts, but a
+     * password-spraying botnet simply uses a fresh address for each attempt against the same
+     * customer. Login therefore applies both an IP key and a normalized-email key.
      *
      * Laravel's ThrottleRequests middleware emits X-RateLimit-Limit, X-RateLimit-Remaining
      * and X-RateLimit-Reset for each, and Retry-After on a 429.
@@ -94,14 +97,41 @@ class AppServiceProvider extends ServiceProvider
     {
         $limits = config('api.rate_limits');
 
-        // Login and registration are throttled per IP. Registration is limited primarily as
-        // an account-enumeration control: it returns 409 for an already-registered email,
-        // which is a disclosure the throttle keeps impractical to exploit in bulk.
-        RateLimiter::for('auth', fn (Request $request) => Limit::perMinute($limits['auth'])->by($request->ip()));
+        // Registration, password-reset, and verification-mail resend are limited per IP. The
+        // registration 409 response is an unavoidable account-existence disclosure, so this
+        // keeps it impractical to enumerate addresses in bulk.
+        RateLimiter::for('auth', fn (Request $request) => Limit::perMinute($limits['auth'])
+            ->by('auth-ip:'.$request->ip()));
+
+        RateLimiter::for('login', function (Request $request) use ($limits): array {
+            $email = mb_strtolower(trim((string) $request->input('email')));
+
+            return [
+                Limit::perMinute($limits['auth'])->by('login-ip:'.$request->ip()),
+                Limit::perMinute($limits['login_email'])->by('login-email:'.hash('sha256', $email)),
+            ];
+        });
+
+        // A refresh token endpoint cannot use auth:sanctum (it is invoked precisely after the
+        // access token expires), but it must still not accept an unlimited stream of guesses.
+        RateLimiter::for('refresh', fn (Request $request) => Limit::perMinute($limits['refresh'])
+            ->by('refresh-ip:'.$request->ip()));
+
+        RateLimiter::for('verification', fn (Request $request) => [
+            Limit::perMinute($limits['verification'])->by('verification-ip:'.$request->ip()),
+            Limit::perMinute($limits['verification'])->by('verification-user:'.($request->user()?->id ?: $request->ip())),
+        ]);
+
+        // Telegram webhooks are unauthenticated at the framework level. The header signature is
+        // still the identity proof; the throttle absorbs unauthenticated floods before the bot
+        // client or database is touched.
+        RateLimiter::for('webhook', fn (Request $request) => Limit::perMinute($limits['webhook'])
+            ->by('webhook-ip:'.$request->ip()));
 
         RateLimiter::for('authenticated', fn (Request $request) => Limit::perMinute($limits['authenticated'])
-            ->by($request->user()?->id ?: $request->ip()));
+            ->by('user:'.($request->user()?->id ?: $request->ip())));
 
-        RateLimiter::for('catalog', fn (Request $request) => Limit::perMinute($limits['catalog'])->by($request->ip()));
+        RateLimiter::for('catalog', fn (Request $request) => Limit::perMinute($limits['catalog'])
+            ->by('catalog-ip:'.$request->ip()));
     }
 }

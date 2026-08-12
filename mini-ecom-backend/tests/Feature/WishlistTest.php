@@ -41,8 +41,9 @@ test('the list contains only the caller own wishlist items, product eager loaded
         ->assertOk()
         ->assertJsonCount(1, 'data');
 
-    // One query for the wishlist items plus their eager-loaded relations, not N+1.
-    expect(count(DB::getQueryLog()))->toBeLessThanOrEqual(5);
+    // One additional fixed query refreshes account status in `account.active`; the wishlist
+    // items and their relations remain eagerly loaded rather than scaling with row count.
+    expect(count(DB::getQueryLog()))->toBeLessThanOrEqual(6);
 
     DB::disableQueryLog();
 

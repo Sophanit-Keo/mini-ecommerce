@@ -24,8 +24,16 @@ class AuthenticateUser
             ? Hash::check($password, $user->password_hash)
             : Hash::check($password, '$2y$12$usesomesillystringfore7hnbRJHxXVLeakoG8K30oukPsA.ztMG');
 
-        if ($user === null || ! $passwordMatches || $user->status === UserStatus::Suspended) {
+        if ($user === null || ! $passwordMatches) {
             throw ProblemException::invalidCredentials();
+        }
+
+        // Status is only reported *after* the password verified. Answering "suspended" to
+        // someone who merely guessed the address would confirm the account exists; answering it
+        // to someone who proved they know the password tells them nothing they are not entitled
+        // to, and saves a support ticket asking why a correct password stopped working.
+        if ($user->status !== UserStatus::Active) {
+            throw ProblemException::accountSuspended();
         }
 
         return $this->issueTokenPair->handle($user, $request);

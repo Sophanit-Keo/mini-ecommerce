@@ -356,13 +356,22 @@ test('a final total that does not reconcile with its components is refused', fun
     );
 });
 
-test('the double-submit guard rejects a repeated idempotency key', function () {
+test('the double-submit guard rejects a repeated idempotency key for the same customer', function () {
     $order = Order::factory()->create();
 
     expectRejection(
-        fn () => Order::factory()->create(['idempotency_key' => $order->idempotency_key]),
-        'uq_orders_idempotency_key',
+        fn () => Order::factory()->for($order->user)->create(['idempotency_key' => $order->idempotency_key]),
+        'uq_orders_user_idempotency_key',
     );
+});
+
+test('different customers may use the same idempotency key', function () {
+    $key = (string) Str::uuid7();
+    $first = Order::factory()->create(['idempotency_key' => $key]);
+    $second = Order::factory()->create(['idempotency_key' => $key]);
+
+    expect($second->user_id)->not->toBe($first->user_id)
+        ->and($second->idempotency_key)->toBe($first->idempotency_key);
 });
 
 test('the final figures must be settled together or not at all', function () {

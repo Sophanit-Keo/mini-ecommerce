@@ -53,15 +53,20 @@ class AdvanceOrderStatus
         }
 
         $transition = self::TRANSITIONS[$verb];
-        $fromStatus = $order->status;
 
-        if (! in_array($fromStatus, $transition['from'], true)) {
-            throw ProblemException::invalidStatusTransition($fromStatus->value, $transition['to']->value);
-        }
+        return DB::transaction(function () use ($order, $transition, $verb, $admin, $reason): Order {
+            // The controller or webhook necessarily read an order before entering this action.
+            // Read it again under an exclusive lock before deciding whether the transition is
+            // legal. Otherwise two admins can both see `pending_payment`, both write
+            // `confirmed`, and both create an audit row for the same state change.
+            $lockedOrder = Order::query()->lockForUpdate()->findOrFail($order->id);
+            $fromStatus = $lockedOrder->status;
 
-        $toStatus = $transition['to'];
+            if (! in_array($fromStatus, $transition['from'], true)) {
+                throw ProblemException::invalidStatusTransition($fromStatus->value, $transition['to']->value);
+            }
 
-        DB::transaction(function () use ($order, $fromStatus, $toStatus, $verb, $admin, $reason) {
+            $toStatus = $transition['to'];
             $attributes = ['status' => $toStatus];
 
             if ($toStatus === OrderStatus::Confirmed) {
@@ -73,16 +78,16 @@ class AdvanceOrderStatus
                 $attributes['cancellation_reason'] = $reason ?? self::DEFAULT_REJECTION_NOTE;
             }
 
-            $order->update($attributes);
+            $lockedOrder->update($attributes);
 
-            $order->statusHistory()->create([
+            $lockedOrder->statusHistory()->create([
                 'from_status' => $fromStatus,
                 'to_status' => $toStatus,
                 'changed_by' => $admin->id,
                 'note' => $verb === 'reject' ? ($reason ?? self::DEFAULT_REJECTION_NOTE) : $reason,
             ]);
-        });
 
-        return $order->refresh();
+            return $lockedOrder;
+        });
     }
 }

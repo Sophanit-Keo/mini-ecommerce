@@ -129,6 +129,23 @@ class ProblemException extends RuntimeException
         );
     }
 
+    /**
+     * The credential is genuine but the account behind it is no longer permitted to act.
+     *
+     * 403 rather than 401: retrying with a fresh token will not help, and a client that sees
+     * 401 will correctly try to refresh, which would loop. The distinct `type` is what lets a
+     * client tell "sign in again" apart from "contact support".
+     */
+    public static function accountSuspended(): self
+    {
+        return new self(
+            'account-suspended',
+            'Account suspended',
+            403,
+            'This account is suspended and cannot be used. Please contact support.',
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Requests
     // -----------------------------------------------------------------------

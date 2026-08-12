@@ -11,6 +11,7 @@ use App\Http\Resources\ProductResource;
 use App\Http\Resources\ProductSummaryResource;
 use App\Models\Category;
 use App\Models\Product;
+use App\Support\CatalogCache;
 use App\Support\CursorPage;
 use App\Support\SortKey;
 use Illuminate\Database\Eloquent\Builder;
@@ -18,6 +19,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
  * Public catalogue. Everything here is keyset-paginated and eager-loaded — a product list is
@@ -27,25 +29,32 @@ class ProductController extends Controller
 {
     private const RELEVANCE_SQL = 'MATCH(products.name, products.brand, products.description) AGAINST (? IN NATURAL LANGUAGE MODE)';
 
-    public function index(ListProductsRequest $request): JsonResponse
+    public function index(ListProductsRequest $request): JsonResponse|SymfonyResponse
     {
-        $term = $request->searchTerm();
+        // Public reads dominate the traffic profile. Cache the fully transformed payload rather
+        // than Eloquent objects, so it is portable across cache drivers and never creates a
+        // surprise lazy load when a cached response is read back.
+        $payload = CatalogCache::remember('products', $request->query(), function () use ($request): array {
+            $term = $request->searchTerm();
 
-        $query = $term === null
-            ? tap($this->baseQuery(), fn (Builder $q) => $this->applyFilters($q, $request))
-            : $this->searchQuery($term, $request);
+            $query = $term === null
+                ? tap($this->baseQuery(), fn (Builder $q) => $this->applyFilters($q, $request))
+                : $this->searchQuery($term, $request);
 
-        $page = CursorPage::build(
-            $query,
-            $this->sortKeys($request->sort(), $term),
-            $request->limit(),
-            $request->query('cursor'),
-        );
+            $page = CursorPage::build(
+                $query,
+                $this->sortKeys($request->sort(), $term),
+                $request->limit(),
+                $request->query('cursor'),
+            );
 
-        return response()->json([
-            'data' => ProductSummaryResource::collection($page->items),
-            'page' => $page->toPageInfo(),
-        ]);
+            return [
+                'data' => ProductSummaryResource::collection($page->items)->resolve($request),
+                'page' => $page->toPageInfo(),
+            ];
+        });
+
+        return CatalogCache::response($request, $payload);
     }
 
     /**
@@ -87,18 +96,22 @@ class ProductController extends Controller
             ->with(['category', 'primaryImage', 'inventory']);
     }
 
-    public function show(string $productId): ProductResource
+    public function show(Request $request, string $productId): JsonResponse|SymfonyResponse
     {
-        $product = $this->baseQuery()
-            ->with(['images' => fn ($images) => $images->orderBy('position')])
-            ->wherePublicId($productId)
-            ->first();
+        $payload = CatalogCache::remember('product', ['id' => $productId], function () use ($request, $productId): array {
+            $product = $this->baseQuery()
+                ->with(['images' => fn ($images) => $images->orderBy('position')])
+                ->wherePublicId($productId)
+                ->first();
 
-        if ($product === null) {
-            throw ProblemException::notFound('No such product.');
-        }
+            if ($product === null) {
+                throw ProblemException::notFound('No such product.');
+            }
 
-        return ProductResource::make($product);
+            return ProductResource::make($product)->resolve($request);
+        });
+
+        return CatalogCache::response($request, $payload);
     }
 
     /**
@@ -118,6 +131,9 @@ class ProductController extends Controller
         DB::transaction(function () use ($request, $product) {
             $product->update($request->toAttributes());
         });
+
+        // Versioned cache invalidation is immediate, and avoids a database-wide cache delete.
+        CatalogCache::bust();
 
         return ProductResource::make(
             $product->refresh()->load(['category', 'images' => fn ($images) => $images->orderBy('position')])
@@ -140,6 +156,7 @@ class ProductController extends Controller
         }
 
         $product->delete();
+        CatalogCache::bust();
 
         return response()->noContent();
     }
@@ -152,27 +169,31 @@ class ProductController extends Controller
      * for a pre-packed one changes what the customer is charged for in a way a like-for-like
      * swap does not.
      */
-    public function substitutes(Request $request, string $productId): JsonResponse
+    public function substitutes(Request $request, string $productId): JsonResponse|SymfonyResponse
     {
         $limit = min(max((int) ($request->query('limit') ?? 5), 1), 20);
 
-        $product = Product::where('is_active', true)->wherePublicId($productId)->first();
+        $payload = CatalogCache::remember('substitutes', ['id' => $productId, 'limit' => $limit], function () use ($request, $productId, $limit): array {
+            $product = Product::where('is_active', true)->wherePublicId($productId)->first();
 
-        if ($product === null) {
-            throw ProblemException::notFound('No such product.');
-        }
+            if ($product === null) {
+                throw ProblemException::notFound('No such product.');
+            }
 
-        $substitutes = $this->baseQuery()
-            ->where('category_id', $product->category_id)
-            ->whereKeyNot($product->id)
-            ->whereHas('inventory', fn (Builder $inventory) => $inventory->where('quantity_available', '>', 0))
-            ->orderByRaw('products.sold_by = ? DESC', [$product->sold_by->value])
-            ->orderByRaw('ABS(products.effective_price - ?) ASC', [$product->effective_price])
-            ->orderBy('products.id')
-            ->limit($limit)
-            ->get();
+            $substitutes = $this->baseQuery()
+                ->where('category_id', $product->category_id)
+                ->whereKeyNot($product->id)
+                ->whereHas('inventory', fn (Builder $inventory) => $inventory->where('quantity_available', '>', 0))
+                ->orderByRaw('products.sold_by = ? DESC', [$product->sold_by->value])
+                ->orderByRaw('ABS(products.effective_price - ?) ASC', [$product->effective_price])
+                ->orderBy('products.id')
+                ->limit($limit)
+                ->get();
 
-        return response()->json(['data' => ProductSummaryResource::collection($substitutes)]);
+            return ['data' => ProductSummaryResource::collection($substitutes)->resolve($request)];
+        });
+
+        return CatalogCache::response($request, $payload);
     }
 
     /**

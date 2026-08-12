@@ -31,7 +31,7 @@ class CartController extends Controller
      */
     public function show(Request $request): JsonResponse
     {
-        return CartResource::make($this->activeCart($request))->response()->setStatusCode(Response::HTTP_OK);
+        return CartResource::make($this->activeCart($request, withItems: true))->response()->setStatusCode(Response::HTTP_OK);
     }
 
     public function storeItem(AddCartItemRequest $request): JsonResponse
@@ -106,35 +106,50 @@ class CartController extends Controller
      * most one active cart per user in the database — two concurrent "get or create" requests
      * from two tabs race on the insert, and the loser here simply re-reads the winner's row
      * rather than erroring.
+     *
+     * Only the read endpoint needs the complete `items.product` graph. Previously this helper
+     * always eager-loaded it, so adding, editing, or deleting *one* item paid to hydrate every
+     * item in the cart. Store the cart row on the request and load the graph only if requested;
+     * a request that needs both gets one row lookup instead of repeating it.
      */
-    private function activeCart(Request $request): Cart
+    private function activeCart(Request $request, bool $withItems = false): Cart
     {
+        $cart = $request->attributes->get('active_cart');
+
+        if ($cart instanceof Cart) {
+            return $withItems ? $cart->loadMissing('items.product') : $cart;
+        }
+
         $user = $request->user();
+        $cart = $user->carts()->where('status', CartStatus::Active)->first();
 
-        $cart = $user->carts()->where('status', CartStatus::Active)->with('items.product')->first();
+        if ($cart === null) {
+            try {
+                $cart = $user->carts()->create(['status' => CartStatus::Active, 'currency' => 'USD']);
+            } catch (QueryException $e) {
+                if (! str_contains($e->getMessage(), 'uq_carts_active_user')) {
+                    throw $e;
+                }
 
-        if ($cart !== null) {
-            return $cart;
-        }
-
-        try {
-            $cart = $user->carts()->create(['status' => CartStatus::Active, 'currency' => 'USD']);
-        } catch (QueryException $e) {
-            if (! str_contains($e->getMessage(), 'uq_carts_active_user')) {
-                throw $e;
+                $cart = $user->carts()->where('status', CartStatus::Active)->firstOrFail();
             }
-
-            $cart = $user->carts()->where('status', CartStatus::Active)->firstOrFail();
         }
 
-        return $cart->load('items.product');
+        $request->attributes->set('active_cart', $cart);
+
+        return $withItems ? $cart->load('items.product') : $cart;
     }
 
     private function findItemForUser(Request $request, string $cartItemId): CartItem
     {
         $cart = $this->activeCart($request);
 
-        $item = $cart->items()->wherePublicId($cartItemId)->first();
+        // The update path validates quantity against the product's current inventory. Load that
+        // small graph for this one line, never the rest of the cart.
+        $item = $cart->items()
+            ->with('product.inventory')
+            ->wherePublicId($cartItemId)
+            ->first();
 
         if ($item === null) {
             throw ProblemException::notFound('No such cart item.');

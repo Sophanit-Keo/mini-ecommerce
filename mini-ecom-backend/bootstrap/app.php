@@ -1,7 +1,10 @@
 <?php
 
 use App\Exceptions\ProblemException;
+use App\Http\Middleware\EnsureAccountIsActive;
 use App\Http\Middleware\EnsureUserIsAdmin;
+use App\Http\Middleware\LimitRequestSize;
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -25,7 +28,30 @@ $app = Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Request bodies are tiny JSON documents in this API; reject oversized payloads before
+        // PHP spends memory decoding them. Response headers are global so even error responses
+        // (including ones Laravel creates before reaching a route) inherit the safe defaults.
+        $middleware->append([
+            // Order matters: this outer wrapper also adds headers to a 413 emitted by the
+            // request-size guard below.
+            SecurityHeaders::class,
+            LimitRequestSize::class,
+        ]);
+
+        // Per-IP throttles are only meaningful when `Request::ip()` represents the browser,
+        // rather than an upstream load balancer. Trust *only* the proxies configured by the
+        // deployer — trusting every X-Forwarded-For header on a direct server would let an
+        // attacker select a fresh IP and bypass all rate limits.
+        $trustedProxies = array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('API_TRUSTED_PROXIES', '')),
+        )));
+        if ($trustedProxies !== []) {
+            $middleware->trustProxies($trustedProxies);
+        }
+
         $middleware->alias([
+            'account.active' => EnsureAccountIsActive::class,
             'admin' => EnsureUserIsAdmin::class,
         ]);
     })
@@ -33,6 +59,12 @@ $app = Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('v1/*'),
         );
+
+        // Exceptions are finalized outside the normal route middleware pipeline. Apply the same
+        // policy here so error responses cannot be framed, sniffed, or cached as credentials.
+        $exceptions->respond(function ($response, $exception, Request $request) {
+            return app(SecurityHeaders::class)->apply($request, $response);
+        });
 
         // Every error leaves this API as an RFC 9457 problem document. Framework exceptions
         // are translated here so no individual handler has to remember to do it.

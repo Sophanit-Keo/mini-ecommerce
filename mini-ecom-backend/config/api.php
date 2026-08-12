@@ -29,6 +29,14 @@ return [
 
     'refresh_token_ttl' => (int) env('API_REFRESH_TOKEN_TTL', 30 * 24 * 60 * 60),
 
+    // A verification code is destroyed after this many incorrect attempts. The durable counter
+    // is intentionally independent of any IP-based throttle, because attackers can rotate IPs.
+    'verification_max_attempts' => (int) env('API_VERIFICATION_MAX_ATTEMPTS', 5),
+
+    // Seconds to cache public catalogue payloads. 0 is a deliberate opt-out for debugging or
+    // deployments where the cache store is not shared between application instances.
+    'catalog_cache_ttl' => (int) env('API_CATALOG_CACHE_TTL', 60),
+
     /*
     |--------------------------------------------------------------------------
     | Rate limits
@@ -41,7 +49,25 @@ return [
     */
 
     'rate_limits' => [
+        // Registration, password-reset and resend routes: one IP should not turn the endpoint
+        // into an account-enumeration or mail-relay service.
         'auth' => (int) env('API_RATE_LIMIT_AUTH', 5),
+
+        // Login applies both the IP limit above and this per-email limit. The latter protects a
+        // targeted account from password spraying spread across a botnet of IP addresses.
+        'login_email' => (int) env('API_RATE_LIMIT_LOGIN_EMAIL', 10),
+
+        // Refreshes are unauthenticated because their access token may have expired; without a
+        // dedicated limit this was the one credential endpoint that could be hit without bound.
+        'refresh' => (int) env('API_RATE_LIMIT_REFRESH', 10),
+
+        // Each 6-digit code also has a durable failed-attempt budget in the DB. This is a
+        // cheap edge control for obvious bursts before any DB write occurs.
+        'verification' => (int) env('API_RATE_LIMIT_VERIFICATION', 5),
+
+        // Telegram does not use Bearer auth, so abuse protection must live at the webhook edge.
+        'webhook' => (int) env('API_RATE_LIMIT_WEBHOOK', 60),
+
         'authenticated' => (int) env('API_RATE_LIMIT_AUTHENTICATED', 120),
         'catalog' => (int) env('API_RATE_LIMIT_CATALOG', 60),
     ],

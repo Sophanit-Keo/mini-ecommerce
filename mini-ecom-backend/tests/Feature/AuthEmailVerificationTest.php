@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\EmailVerificationCode;
 use App\Models\User;
 use App\Notifications\EmailVerificationCodeNotification;
 use Illuminate\Auth\Events\Verified;
@@ -121,6 +122,31 @@ test('verify email with a wrong code is refused', function () {
         ->assertJsonPath('type', 'https://api.grocerly.example/problems/validation-failed');
 
     expect($user->fresh()->hasVerifiedEmail())->toBeFalse();
+});
+
+test('verification code is burned after its durable failed-attempt budget is exhausted', function () {
+    Notification::fake();
+
+    $user = User::factory()->unverified()->create();
+    $tokens = $this->postJson('/v1/auth/login', ['email' => $user->email, 'password' => 'password'])->json();
+
+    $this->withToken($tokens['accessToken'])
+        ->postJson('/v1/auth/email/verification-notification')
+        ->assertStatus(202);
+
+    $correctCode = capturedVerificationCode($user);
+    $wrongCode = $correctCode === '000000' ? '111111' : '000000';
+
+    // The IP limiter permits these five requests; each one increments the code-row counter,
+    // which survives a hypothetical attacker switching to a new IP for the next try.
+    for ($attempt = 1; $attempt <= 5; $attempt++) {
+        $this->withToken($tokens['accessToken'])
+            ->postJson('/v1/auth/email/verify', ['code' => $wrongCode])
+            ->assertUnprocessable();
+    }
+
+    expect(EmailVerificationCode::where('user_id', $user->id)->exists())->toBeFalse()
+        ->and($user->fresh()->hasVerifiedEmail())->toBeFalse();
 });
 
 test('verify email with an expired code is refused', function () {

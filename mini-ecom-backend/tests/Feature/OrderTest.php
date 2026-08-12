@@ -91,6 +91,36 @@ test('checkout is idempotent on the idempotency key', function () {
         ->and($slot->fresh()->booked_count)->toBe(1);
 });
 
+test('idempotency keys are scoped to the customer who supplied them', function () {
+    $key = (string) Str::uuid7();
+
+    // First customer successfully checks out with the key.
+    $firstCart = cartWithOneItem($this->user);
+    $firstAddress = Address::factory()->for($this->user)->create();
+    $slot = DeliverySlot::factory()->create();
+    $first = $this->postJson('/v1/orders', checkoutPayload([
+        'addressId' => $firstAddress->public_id,
+        'deliverySlotId' => $slot->public_id,
+        'idempotencyKey' => $key,
+    ]))->assertCreated();
+
+    // A second customer's request with the exact same opaque value is unrelated, not a replay.
+    // The old global unique index made this return a misleading 404.
+    $this->actingAs($this->otherCustomer, 'sanctum');
+    $secondCart = cartWithOneItem($this->otherCustomer);
+    $secondAddress = Address::factory()->for($this->otherCustomer)->create();
+    $second = $this->postJson('/v1/orders', checkoutPayload([
+        'addressId' => $secondAddress->public_id,
+        'deliverySlotId' => $slot->public_id,
+        'idempotencyKey' => $key,
+    ]))->assertCreated();
+
+    expect($second->json('id'))->not->toBe($first->json('id'))
+        ->and($firstCart->fresh()->status)->toBe(CartStatus::Converted)
+        ->and($secondCart->fresh()->status)->toBe(CartStatus::Converted)
+        ->and(Order::where('idempotency_key', $key)->count())->toBe(2);
+});
+
 test('checkout rejects an empty cart', function () {
     Cart::factory()->for($this->user)->create();
     $address = Address::factory()->for($this->user)->create();
@@ -163,6 +193,15 @@ test('the order list contains only the caller own orders, newest first', functio
         ->assertJsonPath('data.0.id', $newest->public_id);
 });
 
+test('order page size is clamped to a safe maximum', function () {
+    Order::factory()->for($this->user)->count(101)->create();
+
+    $this->getJson('/v1/orders?perPage=1000000')
+        ->assertOk()
+        ->assertJsonCount(100, 'data')
+        ->assertJsonPath('page.total', 101);
+});
+
 test('order detail eager-loads items and status history without N+1', function () {
     $order = Order::factory()->for($this->user)->create();
     OrderItem::factory()->for($order)->count(3)->create();
@@ -176,7 +215,10 @@ test('order detail eager-loads items and status history without N+1', function (
     $queries = count(DB::getQueryLog());
     DB::disableQueryLog();
 
-    expect($queries)->toBeLessThanOrEqual(3);
+    // The one extra query is the deliberate fresh account-status read in `account.active`.
+    // The order itself, its items, and its history still use a fixed three-query eager-load
+    // shape rather than issuing one query per item or status row.
+    expect($queries)->toBeLessThanOrEqual(4);
 });
 
 test('another customer order is indistinguishable from one that does not exist', function () {
