@@ -12,7 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * (unique `user_id`): a resend replaces the row via `updateOrCreate` rather than accumulating
  * stale codes, and a successful verification deletes it, making the code single-use.
  */
-#[Fillable(['user_id', 'code_hash', 'expires_at'])]
+#[Fillable(['user_id', 'code_hash', 'attempt_count', 'expires_at'])]
 class EmailVerificationCode extends Model
 {
     public const UPDATED_AT = null;
@@ -39,6 +39,7 @@ class EmailVerificationCode extends Model
     protected function casts(): array
     {
         return [
+            'attempt_count' => 'integer',
             'expires_at' => 'datetime',
         ];
     }

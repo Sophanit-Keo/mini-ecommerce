@@ -29,13 +29,22 @@ class OrderController extends Controller
      */
     private const CANCELLABLE_STATUSES = [OrderStatus::PendingPayment, OrderStatus::Confirmed];
 
+    private const DEFAULT_PER_PAGE = 20;
+
+    private const MAX_PER_PAGE = 100;
+
     public function __construct(private readonly PlaceOrder $placeOrder) {}
 
     public function index(Request $request): JsonResponse
     {
+        // `paginate()` performs both an OFFSET read and a COUNT(*). A caller-controlled
+        // million-row page is therefore a database and memory denial-of-service, not a useful
+        // client feature. Keep the documented default, and cap a valid request at 100 rows.
+        $perPage = min(max((int) $request->query('perPage', self::DEFAULT_PER_PAGE), 1), self::MAX_PER_PAGE);
+
         $orders = $request->user()->orders()
             ->orderByDesc('placed_at')
-            ->paginate((int) ($request->query('perPage') ?? 20));
+            ->paginate($perPage);
 
         return response()->json([
             'data' => OrderResource::collection($orders->items()),

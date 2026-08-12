@@ -2,6 +2,7 @@
 
 namespace App\Actions\Auth;
 
+use App\Enums\UserStatus;
 use App\Exceptions\ProblemException;
 use App\Models\RefreshToken;
 use App\Models\User;
@@ -22,6 +23,12 @@ use Illuminate\Support\Facades\DB;
  * deliberately never throws: rejecting a token also has to write (revoking the replayed
  * chain, or marking an expired token dead), and throwing mid-transaction would roll those
  * writes straight back — leaving a detected theft with no effect whatsoever.
+ *
+ * Account status is re-checked here on every rotation. It used to be checked only at login,
+ * which meant suspending an account did nothing to the sessions it already had: the holder of a
+ * refresh token could keep exchanging it for fresh access tokens forever and never notice they
+ * had been suspended. The refresh endpoint is the one place every long-lived session must pass
+ * through, so it is the right place to re-assert the decision.
  */
 class RotateRefreshToken
 {
@@ -38,6 +45,10 @@ class RotateRefreshToken
             TokenRotationOutcome::Replayed => throw $this->revokeChainAndFail($userId),
 
             TokenRotationOutcome::Expired => throw $this->revokeSingleAndFail($tokenId),
+
+            // Genuine token, account no longer permitted to act. Every session is killed so
+            // the credential cannot spring back to life if the suspension is lifted.
+            TokenRotationOutcome::Suspended => throw $this->suspendAndFail($userId),
 
             // An unknown token gets the same answer as a revoked one. Distinguishing them
             // would confirm which strings had ever been valid.
@@ -70,6 +81,12 @@ class RotateRefreshToken
                 return [TokenRotationOutcome::Expired, $token->user_id, $token->id, null];
             }
 
+            // `with('user')` applies the SoftDeletes global scope, so a deleted user resolves
+            // to null here and is treated exactly like a suspended one.
+            if ($token->user === null || $token->user->status !== UserStatus::Active) {
+                return [TokenRotationOutcome::Suspended, $token->user_id, $token->id, null];
+            }
+
             return [
                 TokenRotationOutcome::Rotated,
                 $token->user_id,
@@ -99,5 +116,20 @@ class RotateRefreshToken
         RefreshToken::whereKey($tokenId)->update(['revoked_at' => now()]);
 
         return ProblemException::tokenRevoked();
+    }
+
+    /**
+     * Same teardown as a detected replay — every credential the account holds is destroyed —
+     * but a different answer to the client, so it stops retrying instead of looping on 401.
+     */
+    private function suspendAndFail(int $userId): ProblemException
+    {
+        RefreshToken::where('user_id', $userId)
+            ->whereNull('revoked_at')
+            ->update(['revoked_at' => now()]);
+
+        User::withTrashed()->find($userId)?->tokens()->delete();
+
+        return ProblemException::accountSuspended();
     }
 }

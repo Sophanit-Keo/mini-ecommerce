@@ -447,7 +447,7 @@ Request:
 | `customerNote` | nullable, max 500 |
 | `idempotencyKey` | required, max 64 |
 
-Replaying the same `idempotencyKey` for the same caller returns the order already created (`201`, same body) rather than erroring or double-booking — `uq_orders_idempotency_key` closes the race at the database, not in application code.
+Replaying the same `idempotencyKey` for the **same caller** returns the order already created (`201`, same body) rather than erroring or double-booking. The database constraint `uq_orders_user_idempotency_key` closes the race on the pair `(user_id, idempotency_key)`, so an unrelated customer using the same opaque key cannot block another customer's checkout.
 
 The delivery address is copied into `deliveryAddressSnapshot` at placement, so a later edit to the address never rewrites order history. Each cart line is copied into an order item with product name/SKU/brand/pricing snapshotted at checkout. `deliveryFee` comes from the chosen slot; `taxEstimated` and `discountTotal` are `0.00` in the current implementation. The slot's `bookedCount` is incremented atomically and bounded by its capacity — a full slot returns `409 slot-unavailable`. The cart is marked `converted`.
 

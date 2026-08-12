@@ -4,6 +4,9 @@ use App\Models\Category;
 use App\Models\Inventory;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Models\User;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -91,6 +94,48 @@ test('an unknown or inactive category is a 404', function () {
     $this->getJson('/v1/categories/'.$inactive->public_id)
         ->assertNotFound()
         ->assertHeader('Content-Type', 'application/problem+json');
+});
+
+// ---------------------------------------------------------------------------
+// Public-response cache and conditional GET
+// ---------------------------------------------------------------------------
+
+test('public catalogue responses are cacheable and support conditional GET', function () {
+    Cache::flush();
+    Config::set('api.catalog_cache_ttl', 60);
+    Product::factory()->create(['name' => 'Cached item']);
+
+    $first = $this->getJson('/v1/products')
+        ->assertOk()
+        ->assertHeader('ETag')
+        ->assertHeader('Cache-Control');
+
+    $etag = $first->headers->get('ETag');
+
+    $this->withHeader('If-None-Match', $etag)
+        ->getJson('/v1/products')
+        ->assertStatus(304)
+        ->assertHeader('ETag', $etag)
+        ->assertHeader('Cache-Control');
+});
+
+test('a product edit invalidates cached public catalogue responses immediately', function () {
+    Cache::flush();
+    Config::set('api.catalog_cache_ttl', 60);
+    $product = Product::factory()->create(['name' => 'Original catalogue name']);
+
+    // Prime the cache before the admin edit.
+    $this->getJson('/v1/products')->assertJsonPath('data.0.name', 'Original catalogue name');
+
+    $admin = User::factory()->admin()->create();
+    $this->actingAs($admin, 'sanctum')
+        ->patchJson('/v1/products/'.$product->public_id, ['name' => 'Updated catalogue name'])
+        ->assertOk();
+
+    // The namespace version changed, so this cannot read the payload primed above.
+    $this->getJson('/v1/products')
+        ->assertOk()
+        ->assertJsonPath('data.0.name', 'Updated catalogue name');
 });
 
 // ---------------------------------------------------------------------------

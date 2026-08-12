@@ -16,12 +16,20 @@ use Illuminate\Http\Response;
  */
 class NotificationController extends Controller
 {
+    private const DEFAULT_PER_PAGE = 20;
+
+    private const MAX_PER_PAGE = 100;
+
     public function index(Request $request): JsonResponse
     {
+        // Pagination executes a COUNT(*) alongside the offset query. Cap this untrusted input
+        // so an accidental or hostile `?perPage=1000000` cannot hydrate a huge response.
+        $perPage = min(max((int) $request->query('perPage', self::DEFAULT_PER_PAGE), 1), self::MAX_PER_PAGE);
+
         $notifications = $request->user()->notifications()
             ->when($request->boolean('unreadOnly'), fn ($query) => $query->whereNull('read_at'))
             ->orderByDesc('created_at')
-            ->paginate((int) ($request->query('perPage') ?? 20));
+            ->paginate($perPage);
 
         return response()->json([
             'data' => NotificationResource::collection($notifications->items()),

@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\UserRole;
+use App\Enums\UserStatus;
 use App\Models\RefreshToken;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
@@ -117,9 +118,60 @@ test('login never distinguishes a wrong password from a missing account', functi
 test('a suspended account cannot sign in', function () {
     User::factory()->suspended()->create(['email' => 'suspended@example.com']);
 
+    // 403, not 401: the caller proved they know the password, so naming the real reason
+    // discloses nothing, and a 401 would send a well-behaved client into a refresh loop.
     $this->postJson('/v1/auth/login', ['email' => 'suspended@example.com', 'password' => 'password'])
+        ->assertForbidden()
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/account-suspended');
+});
+
+test('a wrong password on a suspended account stays indistinguishable from any other failure', function () {
+    User::factory()->suspended()->create(['email' => 'suspended@example.com']);
+
+    $this->postJson('/v1/auth/login', ['email' => 'suspended@example.com', 'password' => 'not-the-password'])
         ->assertUnauthorized()
         ->assertJsonPath('type', 'https://api.grocerly.example/problems/invalid-credentials');
+});
+
+test('suspending an account kills the sessions it already had', function () {
+    $tokens = registerCustomer($this);
+    $user = User::where('email', 'chain@example.com')->firstOrFail();
+
+    // Still working before the suspension lands.
+    $this->withToken($tokens['accessToken'])->getJson('/v1/auth/me')->assertOk();
+
+    $user->update(['status' => UserStatus::Suspended]);
+
+    // The access token it already holds stops working immediately, rather than surviving for
+    // the remainder of its 15 minutes.
+    $this->withToken($tokens['accessToken'])->getJson('/v1/auth/me')
+        ->assertForbidden()
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/account-suspended');
+
+    // The active-account guard has already torn down all sessions, so a subsequent refresh is
+    // the normal generic 401 for a revoked credential rather than a second status disclosure.
+    $this->postJson('/v1/auth/refresh', ['refreshToken' => $tokens['refreshToken']])
+        ->assertUnauthorized()
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/token-revoked');
+
+    expect($user->refreshTokens()->whereNull('revoked_at')->count())->toBe(0)
+        ->and($user->tokens()->count())->toBe(0);
+});
+
+test('refreshing immediately after suspension denies the account and tears down all sessions', function () {
+    $tokens = registerCustomer($this);
+    $user = User::where('email', 'chain@example.com')->firstOrFail();
+    $user->update(['status' => UserStatus::Suspended]);
+
+    // This reaches RotateRefreshToken directly, before an authenticated endpoint had an
+    // opportunity to revoke the chain, and proves the long-lived credential cannot bypass the
+    // new account-status control.
+    $this->postJson('/v1/auth/refresh', ['refreshToken' => $tokens['refreshToken']])
+        ->assertForbidden()
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/account-suspended');
+
+    expect($user->refreshTokens()->whereNull('revoked_at')->count())->toBe(0)
+        ->and($user->tokens()->count())->toBe(0);
 });
 
 test('login is throttled at five attempts per minute per IP', function () {

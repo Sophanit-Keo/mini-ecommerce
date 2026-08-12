@@ -25,6 +25,9 @@ class SendEmailVerificationCode
             ['user_id' => $user->id],
             [
                 'code_hash' => EmailVerificationCode::hash($code),
+                // A new email creates a *new credential*, so it must receive a fresh attempt
+                // budget rather than inheriting failures from the code it replaced.
+                'attempt_count' => 0,
                 'expires_at' => now()->addMinutes(self::TTL_MINUTES),
             ],
         );
