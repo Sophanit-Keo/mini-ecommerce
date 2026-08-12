@@ -661,6 +661,31 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /checkout/quote:
+    post:
+      tags: [Checkout]
+      summary: Create a short-lived server-authoritative checkout quote
+      description: The quote binds the caller, active cart, address, delivery slot and payment method. It does not reserve stock or capacity.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckoutQuoteRequest" }
+      responses:
+        "200":
+          description: Current checkout quote
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutQuote" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /orders:
     get:
       tags: [Orders]
@@ -729,6 +754,77 @@ paths:
               schema: { $ref: "#/components/schemas/Order" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /orders/{orderId}/payments/bakong:
+    post:
+      tags: [Payments]
+      summary: Start or retrieve the current Bakong KHQR payment attempt
+      description: Only available to the owner of a pending Bakong order. It is idempotent and never returns Bakong credentials or provider lookup keys.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Pending or already-verified Bakong payment attempt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentAttempt" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /orders/{orderId}/payments/bakong/verify:
+    post:
+      tags: [Payments]
+      summary: Verify the server-generated Bakong KHQR payment
+      description: The server sends only its own MD5 reference to Bakong. A client cannot submit amount, payment state, or a provider hash.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Verified payment attempt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentAttempt" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /orders/{orderId}/restore-cart:
+    post:
+      tags: [Orders]
+      summary: Restore an expired or failed payment order to the active cart
+      description: Exact-once recovery. Current product activity and inventory are checked under lock; delivery capacity is not restored.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Active cart, restored once or returned on replay
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Cart" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
 
   /orders/{orderId}/cancel:
     post:
@@ -1201,6 +1297,53 @@ components:
         bookedCount: { type: integer, minimum: 0 }
         remainingCapacity: { type: integer, minimum: 0 }
 
+    CheckoutQuoteRequest:
+      type: object
+      required: [addressId, deliverySlotId, paymentMethod]
+      properties:
+        addressId: { type: string, format: uuid }
+        deliverySlotId: { type: string, format: uuid }
+        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet, bakong] }
+
+    CheckoutQuote:
+      type: object
+      required: [quoteToken, expiresAt, currency, items, subtotal, deliveryFee, discountTotal, tax, total, paymentMethod, deliverySlotId, addressId]
+      properties:
+        quoteToken: { type: string, description: Opaque server-signed checkout token }
+        expiresAt: { type: string, format: date-time }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string, format: uuid }
+              name: { type: string }
+              quantity: { type: string }
+              unitPrice: { type: string }
+              lineTotal: { type: string }
+              availableQuantity: { type: string }
+        subtotal: { type: string }
+        deliveryFee: { type: string }
+        discountTotal: { type: string }
+        tax: { type: string }
+        total: { type: string }
+        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet, bakong] }
+        deliverySlotId: { type: string, format: uuid }
+        addressId: { type: string, format: uuid }
+
+    PaymentAttempt:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, enum: [bakong] }
+        status: { type: string, enum: [pending, verified, expired, failed] }
+        amount: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        khqrPayload: { type: string, nullable: true, description: Present only while a payment attempt is pending }
+        expiresAt: { type: string, format: date-time }
+        verifiedAt: { type: string, format: date-time, nullable: true }
+
     Order:
       type: object
       properties:
@@ -1210,7 +1353,15 @@ components:
           type: string
           enum: [pending_payment, confirmed, picking, packed, out_for_delivery, delivered, cancelled, refunded]
         paymentStatus: { type: string, enum: [pending, authorized, captured, failed, refunded] }
-        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet] }
+        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet, bakong] }
+        payment:
+          type: object
+          properties:
+            method: { type: string, enum: [card, cash_on_delivery, wallet, bakong] }
+            status: { type: string, enum: [pending, authorized, captured, failed, refunded] }
+            authorizedAmount: { type: string, nullable: true }
+            capturedAmount: { type: string, nullable: true }
+            attempt: { $ref: "#/components/schemas/PaymentAttempt", nullable: true }
         currency: { type: string, minLength: 3, maxLength: 3 }
         deliveryAddressSnapshot: { type: object }
         deliverySlotId: { type: string, format: uuid, nullable: true }
@@ -1237,11 +1388,12 @@ components:
 
     OrderPlacement:
       type: object
-      required: [addressId, deliverySlotId, paymentMethod, idempotencyKey]
+      required: [addressId, deliverySlotId, paymentMethod, quoteToken, idempotencyKey]
       properties:
         addressId: { type: string, format: uuid }
         deliverySlotId: { type: string, format: uuid }
-        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet] }
+        paymentMethod: { type: string, enum: [card, cash_on_delivery, wallet, bakong] }
+        quoteToken: { type: string, maxLength: 2048 }
         customerNote: { type: string, maxLength: 500, nullable: true }
         idempotencyKey: { type: string, maxLength: 64 }
 

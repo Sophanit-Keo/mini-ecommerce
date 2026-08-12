@@ -4,8 +4,10 @@ use App\Http\Controllers\Api\V1\AddressController;
 use App\Http\Controllers\Api\V1\AdminOrderController;
 use App\Http\Controllers\Api\V1\AdminTelegramController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\BakongPaymentController;
 use App\Http\Controllers\Api\V1\CartController;
 use App\Http\Controllers\Api\V1\CategoryController;
+use App\Http\Controllers\Api\V1\CheckoutController;
 use App\Http\Controllers\Api\V1\DeliverySlotController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\OrderController;
@@ -77,9 +79,14 @@ Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])-
     Route::post('wishlist/items', [WishlistController::class, 'storeItem']);
     Route::delete('wishlist/items/{wishlistItemId}', [WishlistController::class, 'destroyItem']);
 
+    Route::post('checkout/quote', [CheckoutController::class, 'quote'])->middleware('throttle:checkout');
+
     Route::get('orders', [OrderController::class, 'index']);
-    Route::post('orders', [OrderController::class, 'store']);
+    Route::post('orders', [OrderController::class, 'store'])->middleware('throttle:checkout');
     Route::get('orders/{orderId}', [OrderController::class, 'show']);
+    Route::post('orders/{orderId}/payments/bakong', [BakongPaymentController::class, 'start'])->middleware('throttle:payment');
+    Route::post('orders/{orderId}/payments/bakong/verify', [BakongPaymentController::class, 'verify'])->middleware('throttle:payment');
+    Route::post('orders/{orderId}/restore-cart', [OrderController::class, 'restoreCart'])->middleware('throttle:checkout');
     Route::post('orders/{orderId}/cancel', [OrderController::class, 'cancel']);
 
     Route::get('notifications', [NotificationController::class, 'index']);

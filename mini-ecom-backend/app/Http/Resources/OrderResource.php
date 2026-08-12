@@ -22,6 +22,15 @@ class OrderResource extends JsonResource
             'status' => $this->status->value,
             'paymentStatus' => $this->payment_status->value,
             'paymentMethod' => $this->payment_method->value,
+            'payment' => [
+                'method' => $this->payment_method->value,
+                'status' => $this->payment_status->value,
+                'authorizedAmount' => $this->authorized_amount,
+                'capturedAmount' => $this->captured_amount,
+                'attempt' => $this->relationLoaded('latestPaymentAttempt') && $this->latestPaymentAttempt !== null
+                    ? PaymentAttemptResource::make($this->latestPaymentAttempt)
+                    : null,
+            ],
             'currency' => $this->currency,
             'deliveryAddressSnapshot' => $this->delivery_address_snapshot,
             'deliverySlotId' => $this->relationLoaded('deliverySlot') ? $this->deliverySlot?->public_id : null,

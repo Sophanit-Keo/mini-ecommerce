@@ -263,6 +263,16 @@ class ProblemException extends RuntimeException
         );
     }
 
+    public static function staleCheckoutQuote(): self
+    {
+        return new self(
+            'stale-checkout-quote',
+            'Checkout quote has changed',
+            409,
+            'The quote expired or no longer matches the current cart, address, delivery slot, or payment method. Request a new quote and try again.',
+        );
+    }
+
     public static function outsideDeliveryArea(): self
     {
         return new self(
@@ -312,6 +322,46 @@ class ProblemException extends RuntimeException
             409,
             'This card or wallet order cannot be confirmed until payment is authorized or captured.',
             ['paymentStatus' => $paymentStatus],
+        );
+    }
+
+    public static function paymentUnavailable(): self
+    {
+        return new self(
+            'payment-unavailable',
+            'Payment method unavailable',
+            503,
+            'Bakong payments are not configured. Please select another method or contact support.',
+        );
+    }
+
+    public static function paymentAttemptExpired(): self
+    {
+        return new self(
+            'payment-attempt-expired',
+            'Payment attempt expired',
+            409,
+            'This payment QR has expired. Start a new Bakong payment attempt.',
+        );
+    }
+
+    public static function paymentPending(): self
+    {
+        return new self(
+            'payment-pending',
+            'Payment has not completed',
+            409,
+            'Bakong has not confirmed this payment yet. Please complete payment and try again.',
+        );
+    }
+
+    public static function paymentVerificationFailed(): self
+    {
+        return new self(
+            'payment-verification-failed',
+            'Payment verification failed',
+            502,
+            'The payment provider could not be verified safely. No order state was changed; try again later.',
         );
     }
 

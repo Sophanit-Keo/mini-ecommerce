@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Actions\Orders\ManageOrderReservation;
 use App\Enums\OrderStatus;
+use App\Enums\PaymentAttemptStatus;
 use App\Enums\PaymentStatus;
 use App\Models\Order;
 use Illuminate\Console\Command;
@@ -48,6 +49,9 @@ class ReleaseExpiredOrderReservations extends Command
                 }
 
                 $reservations->release($order);
+                $order->paymentAttempts()
+                    ->where('status', PaymentAttemptStatus::Pending)
+                    ->update(['status' => PaymentAttemptStatus::Expired]);
                 $order->update([
                     'status' => OrderStatus::Cancelled,
                     'payment_status' => PaymentStatus::Failed,

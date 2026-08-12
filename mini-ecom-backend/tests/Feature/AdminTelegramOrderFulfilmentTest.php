@@ -1,6 +1,9 @@
 <?php
 
+use App\Actions\Checkout\CreateCheckoutQuote;
+use App\Enums\CartStatus;
 use App\Enums\OrderStatus;
+use App\Enums\PaymentMethod;
 use App\Models\Address;
 use App\Models\Cart;
 use App\Models\CartItem;
@@ -43,10 +46,26 @@ function fulfilmentCheckoutPayload(array $overrides = []): array
         'addressId' => $overrides['addressId'] ?? null,
         'deliverySlotId' => $overrides['deliverySlotId'] ?? null,
         'paymentMethod' => 'card',
+        'quoteToken' => 'test-quote-token',
         'customerNote' => null,
         'idempotencyKey' => (string) Str::uuid7(),
         ...$overrides,
     ];
+}
+
+function fulfilmentQuotedCheckoutPayload(User $user, Address $address, DeliverySlot $slot, array $overrides = []): array
+{
+    $paymentMethod = PaymentMethod::from($overrides['paymentMethod'] ?? 'card');
+    $cart = $user->carts()->where('status', CartStatus::Active)->with('items.product.inventory')->firstOrFail();
+    $quote = app(CreateCheckoutQuote::class)->create($user, $cart, $address, $slot, $paymentMethod);
+
+    return fulfilmentCheckoutPayload([
+        'addressId' => $address->public_id,
+        'deliverySlotId' => $slot->public_id,
+        'paymentMethod' => $paymentMethod->value,
+        'quoteToken' => $quote['quoteToken'],
+        ...$overrides,
+    ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,10 +168,7 @@ test('admin rejection releases a checked-out order resources in the same transac
     $slot = DeliverySlot::factory()->create();
 
     $this->actingAs($this->customer, 'sanctum')
-        ->postJson('/v1/orders', fulfilmentCheckoutPayload([
-            'addressId' => $address->public_id,
-            'deliverySlotId' => $slot->public_id,
-        ]))
+        ->postJson('/v1/orders', fulfilmentQuotedCheckoutPayload($this->customer, $address, $slot))
         ->assertCreated();
 
     $order = Order::sole();
@@ -269,10 +285,7 @@ test('placing an order notifies linked admins on telegram', function () {
     $slot = DeliverySlot::factory()->create();
 
     $this->actingAs($this->customer, 'sanctum')
-        ->postJson('/v1/orders', fulfilmentCheckoutPayload([
-            'addressId' => $address->public_id,
-            'deliverySlotId' => $slot->public_id,
-        ]))->assertCreated();
+        ->postJson('/v1/orders', fulfilmentQuotedCheckoutPayload($this->customer, $address, $slot))->assertCreated();
 
     Http::assertSent(fn ($request) => str_contains($request->url(), 'sendMessage')
         && $request->data()['chat_id'] === '777');
@@ -287,10 +300,7 @@ test('placing an order still succeeds if telegram is unreachable', function () {
     $slot = DeliverySlot::factory()->create();
 
     $this->actingAs($this->customer, 'sanctum')
-        ->postJson('/v1/orders', fulfilmentCheckoutPayload([
-            'addressId' => $address->public_id,
-            'deliverySlotId' => $slot->public_id,
-        ]))->assertCreated();
+        ->postJson('/v1/orders', fulfilmentQuotedCheckoutPayload($this->customer, $address, $slot))->assertCreated();
 
     expect(Order::count())->toBe(1);
 });

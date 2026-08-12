@@ -1,7 +1,9 @@
 <?php
 
+use App\Actions\Checkout\CreateCheckoutQuote;
 use App\Enums\CartStatus;
 use App\Enums\OrderStatus;
+use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Models\Address;
 use App\Models\Cart;
@@ -23,11 +25,20 @@ test('expired unpaid checkout reservations release stock and capacity exactly on
     $address = Address::factory()->for($user)->create();
     $slot = DeliverySlot::factory()->create();
 
+    $quote = app(CreateCheckoutQuote::class)->create(
+        $user,
+        $cart->load('items.product.inventory'),
+        $address,
+        $slot,
+        PaymentMethod::Card,
+    );
+
     $this->actingAs($user, 'sanctum')
         ->postJson('/v1/orders', [
             'addressId' => $address->public_id,
             'deliverySlotId' => $slot->public_id,
             'paymentMethod' => 'card',
+            'quoteToken' => $quote['quoteToken'],
             'idempotencyKey' => (string) Str::uuid7(),
         ])
         ->assertCreated();
