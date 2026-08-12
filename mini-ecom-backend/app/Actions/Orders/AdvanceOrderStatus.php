@@ -32,7 +32,7 @@ class AdvanceOrderStatus
     private const TRANSITIONS = [
         'confirm' => ['from' => [OrderStatus::PendingPayment], 'to' => OrderStatus::Confirmed],
         'prepare' => ['from' => [OrderStatus::Confirmed], 'to' => OrderStatus::Picking],
-        'deliver' => ['from' => [OrderStatus::Picking], 'to' => OrderStatus::OutForDelivery],
+        'dispatch' => ['from' => [OrderStatus::Packed], 'to' => OrderStatus::OutForDelivery],
         'complete' => ['from' => [OrderStatus::OutForDelivery], 'to' => OrderStatus::Delivered],
         'reject' => [
             'from' => [OrderStatus::PendingPayment, OrderStatus::Confirmed, OrderStatus::Picking],
@@ -46,6 +46,9 @@ class AdvanceOrderStatus
      */
     private const ALIASES = [
         'cancel' => 'reject',
+        // Preserve the existing Telegram/API verb while routing it through the stricter
+        // packed-only dispatch transition introduced by line-level fulfilment.
+        'deliver' => 'dispatch',
     ];
 
     public function handle(Order $order, string $action, User $admin, ?string $reason = null): Order
@@ -80,6 +83,21 @@ class AdvanceOrderStatus
                 && $lockedOrder->payment_method !== PaymentMethod::CashOnDelivery
                 && ! in_array($lockedOrder->payment_status, [PaymentStatus::Authorized, PaymentStatus::Captured], true)) {
                 throw ProblemException::paymentNotAuthorized($lockedOrder->payment_status->value);
+            }
+
+            if ($verb === 'dispatch') {
+                if (! $lockedOrder->hasFinalTotals() || ! $lockedOrder->hasFulfilledInventory()) {
+                    throw ProblemException::invalidStatusTransition($lockedOrder->status->value, OrderStatus::Packed->value);
+                }
+
+                if ($lockedOrder->reconciliation_status->blocksDispatch()) {
+                    throw ProblemException::reconciliationRequired($lockedOrder->reconciliation_status->value);
+                }
+
+                if ($lockedOrder->payment_method !== PaymentMethod::CashOnDelivery
+                    && $lockedOrder->payment_status !== PaymentStatus::Captured) {
+                    throw ProblemException::paymentNotAuthorized($lockedOrder->payment_status->value);
+                }
             }
 
             $attributes = ['status' => $toStatus];

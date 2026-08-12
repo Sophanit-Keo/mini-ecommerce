@@ -69,7 +69,7 @@ class OrderController extends Controller
     public function show(Request $request, string $orderId): OrderResource
     {
         return OrderResource::make(
-            $this->findForUser($request, $orderId, ['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory' => fn ($query) => $query->orderBy('created_at')])
+            $this->findForUser($request, $orderId, ['deliverySlot', 'latestPaymentAttempt', 'items.substitutions.substituteProduct', 'statusHistory' => fn ($query) => $query->orderBy('created_at')])
         );
     }
 
@@ -83,7 +83,7 @@ class OrderController extends Controller
         $existing = Order::where('user_id', $user->id)->where('idempotency_key', $idempotencyKey)->first();
 
         if ($existing !== null) {
-            return OrderResource::make($existing->load(['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory']))
+            return OrderResource::make($existing->load(['deliverySlot', 'latestPaymentAttempt', 'items.substitutions.substituteProduct', 'statusHistory']))
                 ->response()
                 ->setStatusCode(Response::HTTP_CREATED);
         }
@@ -129,7 +129,7 @@ class OrderController extends Controller
             customerNote: $request->input('customerNote'),
         );
 
-        return OrderResource::make($order->load(['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory']))
+        return OrderResource::make($order->load(['deliverySlot', 'latestPaymentAttempt', 'items.substitutions.substituteProduct', 'statusHistory']))
             ->response()
             ->setStatusCode(Response::HTTP_CREATED);
     }
@@ -177,7 +177,7 @@ class OrderController extends Controller
             return $lockedOrder;
         });
 
-        return OrderResource::make($cancelled->load(['deliverySlot', 'latestPaymentAttempt', 'items', 'statusHistory']));
+        return OrderResource::make($cancelled->load(['deliverySlot', 'latestPaymentAttempt', 'items.substitutions.substituteProduct', 'statusHistory']));
     }
 
     /**

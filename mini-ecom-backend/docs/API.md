@@ -535,21 +535,73 @@ Response `200`: `{ "telegramChatId": "123456789" }`.
 
 ### POST /v1/admin/orders/{orderId}/advance
 
-Steps an order through a simplified four-stage admin flow: `confirm` (`pending_payment` → `confirmed`), `prepare` (`confirmed` → `picking`), `deliver` (`picking` → `out_for_delivery`), `complete` (`out_for_delivery` → `delivered`). Also accepts `reject`/`cancel` (`pending_payment`, `confirmed`, or `picking` → `cancelled`). This flow deliberately skips the `packed` status — `packed` remains a valid order status but is not exposed as an admin action here. A `card`, `wallet`, or `bakong` order may only be confirmed after a server-side payment integration has set `paymentStatus` to `authorized` or `captured`; cash-on-delivery confirmation follows the explicit operational exception.
+This endpoint now controls only the coarse operational transitions: `confirm` (`pending_payment` → `confirmed`), `prepare` (`confirmed` → `picking`), `dispatch` or legacy alias `deliver` (`packed` → `out_for_delivery`), `complete` (`out_for_delivery` → `delivered`), and `reject`/`cancel` (pre-dispatch → `cancelled`). It deliberately cannot skip detailed picking. A non-COD order still requires authorized/captured payment for confirmation; dispatch additionally requires final totals, exact-once inventory fulfilment, and a settled reconciliation state.
 
 Request:
 ```json
-{ "action": "confirm", "reason": "Optional; used as the cancellation reason for reject/cancel" }
+{ "action": "dispatch", "reason": "Optional; used as the cancellation reason for reject/cancel" }
 ```
 
 | Field | Rules |
 |---|---|
-| `action` | required, one of `confirm \| prepare \| deliver \| complete \| reject \| cancel` |
+| `action` | required, one of `confirm \| prepare \| dispatch \| deliver \| complete \| reject \| cancel` |
 | `reason` | nullable, max 280 |
 
-`404` if no such order exists. An out-of-sequence action (e.g. `deliver` on a `pending_payment` order) is `409 invalid-status-transition`. Confirming a pending card/wallet/Bakong payment is `409 payment-not-authorized`. Rejecting a reserved order releases delivery capacity and inventory in the same database transaction.
+`404` if no such order exists. Invalid state changes return `409 invalid-status-transition`; dispatch while a final payment difference exists returns `409 reconciliation-required`. Rejecting an active reservation releases delivery capacity and inventory in the same database transaction.
 
 Response `200`: updated `Order`, including a new `statusHistory` entry attributed to the acting admin.
+
+### POST /v1/admin/orders/{orderId}/items/{itemId}/pick
+
+Records a picker’s actual selection for an unresolved line while the order is in `picking`. Unit lines require `quantity` only; weight lines require both `quantity` and the positive scale reading `weightKg`. The final line amount is calculated on the server as the selected billable quantity multiplied by the line’s snapshotted price, rounded once.
+
+```json
+{ "quantity": "2.000", "weightKg": null, "note": "Selected best available" }
+```
+
+The selected quantity must be greater than zero and may not exceed the original ordered quantity. Response `200`: updated `Order`. Errors include `409 order-item-already-resolved`, `409 invalid-status-transition`, and `422 invalid-fulfillment-weight` or `fulfillment-quantity-out-of-range`.
+
+### POST /v1/admin/orders/{orderId}/items/{itemId}/substitutions
+
+Records a product substitution for an unresolved line in `picking`. The substitute must be active and use the same selling shape (`unit` or `weight`) as the original. The command snapshots substitute name, SKU, price, quantity/weight, and price difference; **only the line’s `finalLineTotal` contributes to the final order total**.
+
+```json
+{
+  "productId": "...",
+  "quantity": "2.000",
+  "weightKg": null,
+  "reason": "Requested brand unavailable",
+  "customerApproved": true
+}
+```
+
+A customer preference of `none` returns `409 substitution-refused`; `contact_me` requires `customerApproved: true` and otherwise returns `409 substitution-approval-required`.
+
+### POST /v1/admin/orders/{orderId}/items/{itemId}/unavailable
+
+Marks an unresolved line unavailable in `picking`.
+
+```json
+{ "reason": "No acceptable replacement in stock" }
+```
+
+The line receives no final price and produces no stock consumption. Its original checkout reservation is released during finalization. Response `200`: updated `Order`.
+
+### POST /v1/admin/orders/{orderId}/finalize
+
+Finalizes a `picking` order only after every line is `picked`, `substituted`, or `unavailable`. In one transaction it locks inventory rows, consumes the actual picked/substituted stock, releases unused original reservations, writes `order_fulfilled`/`order_released` ledger records, calculates `subtotalFinal`, `taxFinal`, and `totalFinal`, records a fulfilment audit event, and changes the order to `packed`. Retrying after success cannot consume inventory twice.
+
+The `reconciliation` response object exposes a deterministic result: `settled` when the final total equals the authorized amount, `amount_due` when more collection is required, `refund_due` when an adjustment/refund is required, or `not_required` for COD. A non-zero delta blocks dispatch until reconciliation is recorded.
+
+### POST /v1/admin/orders/{orderId}/reconcile
+
+Records the external settlement outcome after a packed order has `amount_due` or `refund_due`.
+
+```json
+{ "reference": "BAKONG-ADJUST-0001" }
+```
+
+This endpoint **does not fabricate a provider transfer**. The reference is an auditable record that operations completed the required collection/refund outside the current Bakong adapter. It sets reconciliation to `settled`, records the actor/time, updates the captured amount to the final total, and unlocks dispatch. Response `200`: updated `Order`.
 
 ### Telegram bot
 

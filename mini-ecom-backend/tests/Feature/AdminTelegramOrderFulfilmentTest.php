@@ -133,7 +133,7 @@ test('an admin can confirm a cash-on-delivery order without processor authorizat
     expect($order->fresh()->status)->toBe(OrderStatus::Confirmed);
 });
 
-test('an admin steps an order through prepare, deliver and complete', function () {
+test('an admin cannot dispatch an order until Release 2 finalization has packed it', function () {
     $order = Order::factory()->create(['status' => OrderStatus::Confirmed]);
 
     $this->actingAs($this->admin, 'sanctum');
@@ -142,9 +142,15 @@ test('an admin steps an order through prepare, deliver and complete', function (
         ->assertOk()->assertJsonPath('status', 'picking');
 
     $this->postJson('/v1/admin/orders/'.$order->public_id.'/advance', ['action' => 'deliver'])
-        ->assertOk()->assertJsonPath('status', 'out_for_delivery');
+        ->assertConflict()
+        ->assertJsonPath('type', 'https://api.grocerly.example/problems/invalid-status-transition');
+});
 
-    $this->postJson('/v1/admin/orders/'.$order->public_id.'/advance', ['action' => 'complete'])
+test('an admin can complete a dispatched order', function () {
+    $order = Order::factory()->create(['status' => OrderStatus::OutForDelivery]);
+
+    $this->actingAs($this->admin, 'sanctum')
+        ->postJson('/v1/admin/orders/'.$order->public_id.'/advance', ['action' => 'complete'])
         ->assertOk()->assertJsonPath('status', 'delivered');
 
     expect($order->fresh()->delivered_at)->not->toBeNull();

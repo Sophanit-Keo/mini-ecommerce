@@ -33,6 +33,9 @@ class OrderItemResource extends JsonResource
             'finalLineTotal' => $this->final_line_total,
             'substitutionPreference' => $this->substitution_preference->value,
             'status' => $this->status->value,
+            // `finalLineTotal` remains the only money input to order finalization; the nested
+            // substitution records are an immutable explanation, not an additional charge.
+            'substitutions' => OrderItemSubstitutionResource::collection($this->whenLoaded('substitutions')),
             'note' => $this->note,
         ];
     }

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AddressController;
+use App\Http\Controllers\Api\V1\AdminFulfillmentController;
 use App\Http\Controllers\Api\V1\AdminOrderController;
 use App\Http\Controllers\Api\V1\AdminTelegramController;
 use App\Http\Controllers\Api\V1\AuthController;
@@ -101,6 +102,11 @@ Route::middleware(['auth:sanctum', 'account.active', 'admin', 'throttle:authenti
 
     Route::post('admin/telegram/link', [AdminTelegramController::class, 'link']);
     Route::post('admin/orders/{orderId}/advance', [AdminOrderController::class, 'advance']);
+    Route::post('admin/orders/{orderId}/items/{itemId}/pick', [AdminFulfillmentController::class, 'pick']);
+    Route::post('admin/orders/{orderId}/items/{itemId}/substitutions', [AdminFulfillmentController::class, 'substitute']);
+    Route::post('admin/orders/{orderId}/items/{itemId}/unavailable', [AdminFulfillmentController::class, 'unavailable']);
+    Route::post('admin/orders/{orderId}/finalize', [AdminFulfillmentController::class, 'finalize']);
+    Route::post('admin/orders/{orderId}/reconcile', [AdminFulfillmentController::class, 'reconcile']);
 });
 
 // Telegram webhook — unauthenticated (Telegram cannot send a Bearer token). Authenticity is
