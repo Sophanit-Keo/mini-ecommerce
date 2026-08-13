@@ -5,6 +5,7 @@ namespace Database\Factories;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
+use App\Enums\ReconciliationStatus;
 use App\Models\Address;
 use App\Models\DeliverySlot;
 use App\Models\Order;
@@ -102,6 +103,11 @@ class OrderFactory extends Factory
                 'tax_final' => $taxFinal,
                 'total_final' => $totalFinal,
                 'captured_amount' => $totalFinal,
+                'reconciliation_status' => ReconciliationStatus::Settled,
+                'reconciliation_delta' => null,
+                'reconciliation_reference' => 'exact_authorization',
+                'reconciled_at' => now(),
+                'fulfilled_at' => now(),
                 'reservation_expires_at' => null,
             ];
         });

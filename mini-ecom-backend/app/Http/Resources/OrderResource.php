@@ -31,6 +31,12 @@ class OrderResource extends JsonResource
                     ? PaymentAttemptResource::make($this->latestPaymentAttempt)
                     : null,
             ],
+            'reconciliation' => [
+                'status' => $this->reconciliation_status?->value,
+                'delta' => $this->reconciliation_delta,
+                'reference' => $this->reconciliation_reference,
+                'reconciledAt' => $this->reconciled_at?->toIso8601String(),
+            ],
             'currency' => $this->currency,
             'deliveryAddressSnapshot' => $this->delivery_address_snapshot,
             'deliverySlotId' => $this->relationLoaded('deliverySlot') ? $this->deliverySlot?->public_id : null,
@@ -47,6 +53,7 @@ class OrderResource extends JsonResource
             'confirmedAt' => $this->confirmed_at?->toIso8601String(),
             'deliveredAt' => $this->delivered_at?->toIso8601String(),
             'cancelledAt' => $this->cancelled_at?->toIso8601String(),
+            'fulfilledAt' => $this->fulfilled_at?->toIso8601String(),
             'cancellationReason' => $this->cancellation_reason,
             'items' => OrderItemResource::collection($this->whenLoaded('items')),
             'statusHistory' => OrderStatusHistoryResource::collection($this->whenLoaded('statusHistory')),

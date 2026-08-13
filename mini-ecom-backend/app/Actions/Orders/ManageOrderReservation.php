@@ -98,16 +98,16 @@ final class ManageOrderReservation
     /**
      * Release an active order reservation exactly once.
      *
-     * `reservation_expires_at = null` is the durable release marker. Every release caller locks
-     * the order first, so a concurrent customer cancellation, admin rejection, and expiry sweep
-     * cannot all decrement inventory and capacity. A confirmed order keeps the marker even after
-     * its payment deadline has passed; only a cancellation/rejection/expiry invokes this method.
+     * `reservation_released_at` is the durable release marker. `reservation_expires_at` tracks
+     * only the payment deadline and is cleared after a verified payment, so it cannot tell us
+     * whether stock was released. Every caller locks the order first, preventing concurrent
+     * cancellation, rejection, and expiry paths from decrementing shared resources twice.
      *
      * @return bool true when stock and capacity were released; false when previously released
      */
     public function release(Order $order, ?int $actorId = null): bool
     {
-        if ($order->reservation_expires_at === null) {
+        if ($order->reservation_released_at !== null || $order->fulfilled_at !== null) {
             return false;
         }
 
@@ -126,7 +126,10 @@ final class ManageOrderReservation
                 $slot->update(['booked_count' => $slot->booked_count - 1]);
             }
 
-            $order->update(['reservation_expires_at' => null]);
+            $order->update([
+                'reservation_expires_at' => null,
+                'reservation_released_at' => now(),
+            ]);
 
             return $releasedSlot;
         }
@@ -167,7 +170,10 @@ final class ManageOrderReservation
             ]);
         }
 
-        $order->update(['reservation_expires_at' => null]);
+        $order->update([
+            'reservation_expires_at' => null,
+            'reservation_released_at' => now(),
+        ]);
 
         return true;
     }

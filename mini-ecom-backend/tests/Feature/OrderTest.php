@@ -256,8 +256,9 @@ test('order detail eager-loads items and status history without N+1', function (
     DB::disableQueryLog();
 
     // Fixed queries: fresh account status, order, delivery slot, latest payment attempt, items,
-    // and history. The graph remains eager-loaded rather than issuing one query per item/status row.
-    expect($queries)->toBeLessThanOrEqual(6);
+    // substitution audit rows, substitute products, and history. The graph remains eager-loaded
+    // rather than issuing one query per item/substitution/status row.
+    expect($queries)->toBeLessThanOrEqual(8);
 });
 
 test('another customer order is indistinguishable from one that does not exist', function () {

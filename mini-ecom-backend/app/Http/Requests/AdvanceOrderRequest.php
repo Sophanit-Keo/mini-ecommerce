@@ -13,7 +13,7 @@ class AdvanceOrderRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'action' => ['required', 'string', Rule::in(['confirm', 'prepare', 'deliver', 'complete', 'reject', 'cancel'])],
+            'action' => ['required', 'string', Rule::in(['confirm', 'prepare', 'dispatch', 'deliver', 'complete', 'reject', 'cancel'])],
             'reason' => ['nullable', 'string', 'max:280'],
         ];
     }

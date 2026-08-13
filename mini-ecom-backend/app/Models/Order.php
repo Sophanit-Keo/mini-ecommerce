@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
+use App\Enums\ReconciliationStatus;
 use App\Models\Concerns\HasPublicId;
 use App\Observers\OrderObserver;
 use Database\Factories\OrderFactory;
@@ -35,6 +36,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'subtotal_final', 'tax_final', 'total_final', 'authorized_amount', 'captured_amount',
     'customer_note', 'idempotency_key', 'reservation_expires_at', 'resources_reserved_at',
     'placed_at', 'confirmed_at', 'delivered_at', 'cancelled_at', 'cart_restored_at', 'cancellation_reason',
+    'fulfilled_at', 'reservation_released_at', 'reconciliation_status', 'reconciliation_delta',
+    'reconciliation_reference', 'reconciled_at',
 ])]
 class Order extends Model
 {
@@ -71,6 +74,12 @@ class Order extends Model
         return $this->hasMany(OrderStatusHistory::class);
     }
 
+    /** @return HasMany<OrderFulfillmentEvent, $this> */
+    public function fulfillmentEvents(): HasMany
+    {
+        return $this->hasMany(OrderFulfillmentEvent::class);
+    }
+
     /** @return HasMany<PaymentAttempt, $this> */
     public function paymentAttempts(): HasMany
     {
@@ -89,6 +98,11 @@ class Order extends Model
     public function hasFinalTotals(): bool
     {
         return $this->total_final !== null;
+    }
+
+    public function hasFulfilledInventory(): bool
+    {
+        return $this->fulfilled_at !== null;
     }
 
     /**
@@ -111,9 +125,14 @@ class Order extends Model
             'total_final' => 'decimal:2',
             'authorized_amount' => 'decimal:2',
             'captured_amount' => 'decimal:2',
+            'reconciliation_status' => ReconciliationStatus::class,
+            'reconciliation_delta' => 'decimal:2',
             'placed_at' => 'datetime',
             'reservation_expires_at' => 'datetime',
             'resources_reserved_at' => 'datetime',
+            'fulfilled_at' => 'datetime',
+            'reservation_released_at' => 'datetime',
+            'reconciled_at' => 'datetime',
             'confirmed_at' => 'datetime',
             'delivered_at' => 'datetime',
             'cancelled_at' => 'datetime',

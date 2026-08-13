@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Admin\RecordAdminAuditEvent;
 use App\Enums\SoldBy;
 use App\Exceptions\ProblemException;
 use App\Http\Controllers\Controller;
@@ -27,6 +28,8 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
  */
 class ProductController extends Controller
 {
+    public function __construct(private readonly RecordAdminAuditEvent $audit) {}
+
     private const RELEVANCE_SQL = 'MATCH(products.name, products.brand, products.description) AGAINST (? IN NATURAL LANGUAGE MODE)';
 
     public function index(ListProductsRequest $request): JsonResponse|SymfonyResponse
@@ -128,8 +131,11 @@ class ProductController extends Controller
             throw ProblemException::notFound('No such product.');
         }
 
-        DB::transaction(function () use ($request, $product) {
-            $product->update($request->toAttributes());
+        DB::transaction(function () use ($request, $product): void {
+            $locked = Product::query()->lockForUpdate()->findOrFail($product->id);
+            $before = $this->auditSnapshot($locked);
+            $locked->update($request->toAttributes());
+            $this->audit->handle($request->user(), 'product.updated', $locked, $before, $this->auditSnapshot($locked), $request);
         });
 
         // Versioned cache invalidation is immediate, and avoids a database-wide cache delete.
@@ -147,7 +153,7 @@ class ProductController extends Controller
      * `fk_cart_items_product` is `restrictOnDelete`, but that only guards a hard DELETE, which
      * this never issues.
      */
-    public function destroy(string $productId): Response
+    public function destroy(Request $request, string $productId): Response
     {
         $product = Product::query()->wherePublicId($productId)->first();
 
@@ -155,7 +161,12 @@ class ProductController extends Controller
             throw ProblemException::notFound('No such product.');
         }
 
-        $product->delete();
+        DB::transaction(function () use ($request, $product): void {
+            $locked = Product::query()->lockForUpdate()->findOrFail($product->id);
+            $before = $this->auditSnapshot($locked);
+            $locked->delete();
+            $this->audit->handle($request->user(), 'product.deleted', $locked, $before, null, $request);
+        });
         CatalogCache::bust();
 
         return response()->noContent();
@@ -194,6 +205,12 @@ class ProductController extends Controller
         });
 
         return CatalogCache::response($request, $payload);
+    }
+
+    /** @return array<string, mixed> */
+    private function auditSnapshot(Product $product): array
+    {
+        return ['productId' => $product->public_id, 'sku' => $product->sku, 'slug' => $product->slug, 'isActive' => $product->is_active];
     }
 
     /**

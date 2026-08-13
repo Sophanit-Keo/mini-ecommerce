@@ -386,4 +386,107 @@ class ProblemException extends RuntimeException
             ['itemId' => $itemId],
         );
     }
+
+    public static function substitutionApprovalRequired(): self
+    {
+        return new self(
+            'substitution-approval-required',
+            'Customer approval required',
+            409,
+            'This customer requested approval before a substitute is selected.',
+        );
+    }
+
+    public static function invalidSubstituteProduct(): self
+    {
+        return new self(
+            'invalid-substitute-product',
+            'Invalid substitute product',
+            422,
+            'The substitute must be an active product with the same selling shape as the original line.',
+        );
+    }
+
+    public static function fulfillmentQuantityOutOfRange(): self
+    {
+        return new self(
+            'fulfillment-quantity-out-of-range',
+            'Fulfilment quantity out of range',
+            422,
+            'The selected quantity must be greater than zero and cannot exceed the ordered quantity.',
+        );
+    }
+
+    public static function invalidFulfillmentWeight(): self
+    {
+        return new self(
+            'invalid-fulfillment-weight',
+            'Invalid fulfilment weight',
+            422,
+            'Weighted lines require a positive picked weight; unit lines must not carry one.',
+        );
+    }
+
+    public static function orderItemAlreadyResolved(): self
+    {
+        return new self(
+            'order-item-already-resolved',
+            'Order item already resolved',
+            409,
+            'A resolved order item cannot be picked, substituted, or marked unavailable again.',
+        );
+    }
+
+    public static function reconciliationNotRequired(): self
+    {
+        return new self(
+            'reconciliation-not-required',
+            'Reconciliation is not required',
+            409,
+            'This order has no outstanding payment difference to reconcile.',
+        );
+    }
+
+    public static function reconciliationRequired(?string $status = null): self
+    {
+        return new self(
+            'reconciliation-required',
+            'Payment reconciliation required',
+            409,
+            'The final basket differs from the authorized payment. Record the external collection or refund before dispatch.',
+            array_filter(['reconciliationStatus' => $status]),
+        );
+    }
+
+    public static function inventoryAdjustmentWouldOversell(string $reserved): self
+    {
+        return new self(
+            'inventory-adjustment-would-oversell',
+            'Inventory adjustment would violate reservations',
+            409,
+            'The resulting on-hand quantity cannot be less than inventory already reserved for active orders.',
+            ['reservedQuantity' => $reserved],
+        );
+    }
+
+    public static function slotCapacityBelowBookings(int $bookedCount): self
+    {
+        return new self(
+            'slot-capacity-below-bookings',
+            'Delivery slot capacity is below active bookings',
+            409,
+            'Capacity cannot be reduced below the number of active bookings.',
+            ['bookedCount' => $bookedCount],
+        );
+    }
+
+    public static function slotWindowLocked(): self
+    {
+        return new self(
+            'slot-window-locked',
+            'Delivery slot window is locked',
+            409,
+            'A delivery window with active bookings cannot be rescheduled.',
+        );
+    }
 }

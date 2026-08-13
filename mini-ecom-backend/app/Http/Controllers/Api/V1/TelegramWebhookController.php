@@ -7,11 +7,13 @@ use App\Enums\UserRole;
 use App\Exceptions\ProblemException;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
+use App\Models\TelegramLinkChallenge;
 use App\Models\User;
 use App\Support\Telegram\TelegramClient;
 use App\Support\Telegram\TelegramOrderNotifier;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Receives `callback_query` updates from Telegram's inline order-action buttons.
@@ -41,6 +43,13 @@ class TelegramWebhookController extends Controller
 
         if (blank($secret) || ! hash_equals((string) config('services.telegram.webhook_secret'), (string) $secret)) {
             throw ProblemException::forbidden();
+        }
+
+        $message = $request->input('message');
+        if (is_array($message)) {
+            $this->consumeLinkChallenge($message);
+
+            return response()->noContent();
         }
 
         $callback = $request->input('callback_query');
@@ -92,6 +101,25 @@ class TelegramWebhookController extends Controller
         $this->telegramOrderNotifier->notifyStatusChanged($order, $admin);
 
         return response()->noContent();
+    }
+
+    /** @param array<string, mixed> $message */
+    private function consumeLinkChallenge(array $message): void
+    {
+        $chatId = (string) ($message['chat']['id'] ?? '');
+        $text = trim((string) ($message['text'] ?? ''));
+        if ($chatId === '' || ! preg_match('/^\\/link\\s+([A-Z0-9]{8})$/i', $text, $matches)) {
+            return;
+        }
+
+        DB::transaction(function () use ($chatId, $matches): void {
+            $challenge = TelegramLinkChallenge::query()->where('code_hash', hash('sha256', strtoupper($matches[1])))->whereNull('consumed_at')->where('expires_at', '>', now())->lockForUpdate()->first();
+            if ($challenge === null) {
+                return;
+            }
+            $challenge->user()->lockForUpdate()->firstOrFail()->update(['telegram_chat_id' => $chatId]);
+            $challenge->update(['consumed_at' => now()]);
+        });
     }
 
     /**

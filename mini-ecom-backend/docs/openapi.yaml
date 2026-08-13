@@ -887,12 +887,11 @@ paths:
   /admin/orders/{orderId}/advance:
     post:
       tags: [Admin]
-      summary: Step an order through the admin fulfilment flow (confirm/prepare/deliver/complete/reject)
+      summary: Advance a coarse admin order transition
       description: >
-        Mirrors the actions available on the Telegram bot's inline buttons — both call the
-        same underlying transition table. Deliberately skips the `packed` status. Card and wallet
-        orders cannot be confirmed until a server-side payment integration has recorded an
-        `authorized` or `captured` payment status; cash-on-delivery is the explicit exception.
+        Confirm and prepare enter the detailed fulfilment workflow. Dispatch (or legacy `deliver`)
+        is only legal from `packed` after line finalization, inventory fulfilment, and payment
+        reconciliation. Cash-on-delivery remains the explicit payment exception.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: orderId
@@ -907,7 +906,7 @@ paths:
               type: object
               required: [action]
               properties:
-                action: { type: string, enum: [confirm, prepare, deliver, complete, reject, cancel] }
+                action: { type: string, enum: [confirm, prepare, dispatch, deliver, complete, reject, cancel] }
                 reason: { type: string, maxLength: 280, nullable: true }
       responses:
         "200":
@@ -915,6 +914,115 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/orders/{orderId}/items/{itemId}/pick:
+    post:
+      tags: [Admin, Fulfilment]
+      summary: Record actual quantity or weight picked for one order line
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderItemPick" }
+      responses:
+        "200": { description: Updated order, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/orders/{orderId}/items/{itemId}/substitutions:
+    post:
+      tags: [Admin, Fulfilment]
+      summary: Substitute one unresolved order line
+      description: The substitute must be active and have the same selling shape as the original. `contact_me` preferences require `customerApproved: true`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrderItemSubstitutionWrite" }
+      responses:
+        "200": { description: Updated order, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/orders/{orderId}/items/{itemId}/unavailable:
+    post:
+      tags: [Admin, Fulfilment]
+      summary: Mark one unresolved order line unavailable
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 280 }
+      responses:
+        "200": { description: Updated order, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/orders/{orderId}/finalize:
+    post:
+      tags: [Admin, Fulfilment]
+      summary: Finalize resolved lines, consume inventory, and calculate final totals
+      description: Every line must be picked, substituted, or unavailable. This command atomically consumes actual inventory and changes the order from `picking` to `packed`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Packed order with reconciliation state, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/orders/{orderId}/reconcile:
+    post:
+      tags: [Admin, Fulfilment]
+      summary: Record the external settlement of a final payment difference
+      description: This records an auditable collection/refund reference. It does not initiate a provider transfer.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reference]
+              properties:
+                reference: { type: string, maxLength: 120 }
+      responses:
+        "200": { description: Reconciled order, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1274,7 +1382,44 @@ components:
         finalLineTotal: { type: string, nullable: true }
         substitutionPreference: { type: string, enum: [none, similar, contact_me] }
         status: { type: string, enum: [pending, picked, substituted, unavailable] }
+        substitutions:
+          type: array
+          items: { $ref: "#/components/schemas/OrderItemSubstitution" }
         note: { type: string, nullable: true }
+
+    OrderItemPick:
+      type: object
+      required: [quantity]
+      properties:
+        quantity: { type: string, pattern: "^\\d+(\\.\\d{1,3})?$" }
+        weightKg: { type: string, nullable: true, pattern: "^\\d+(\\.\\d{1,3})?$" }
+        note: { type: string, maxLength: 280, nullable: true }
+
+    OrderItemSubstitutionWrite:
+      type: object
+      required: [productId, quantity, customerApproved]
+      properties:
+        productId: { type: string, format: uuid }
+        quantity: { type: string, pattern: "^\\d+(\\.\\d{1,3})?$" }
+        weightKg: { type: string, nullable: true, pattern: "^\\d+(\\.\\d{1,3})?$" }
+        reason: { type: string, maxLength: 280, nullable: true }
+        customerApproved: { type: boolean }
+
+    OrderItemSubstitution:
+      type: object
+      properties:
+        productId: { type: string, format: uuid, nullable: true }
+        productName: { type: string }
+        productSku: { type: string }
+        unitPrice: { type: string }
+        quantity: { type: string }
+        weightKg: { type: string, nullable: true }
+        lineTotal: { type: string }
+        priceDelta: { type: string }
+        reason: { type: string, nullable: true }
+        decidedBy: { type: string, enum: [picker, customer] }
+        customerApproved: { type: boolean, nullable: true }
+        createdAt: { type: string, format: date-time }
 
     OrderStatusHistoryEntry:
       type: object
@@ -1362,6 +1507,13 @@ components:
             authorizedAmount: { type: string, nullable: true }
             capturedAmount: { type: string, nullable: true }
             attempt: { $ref: "#/components/schemas/PaymentAttempt", nullable: true }
+        reconciliation:
+          type: object
+          properties:
+            status: { type: string, enum: [pending, settled, amount_due, refund_due, not_required] }
+            delta: { type: string, nullable: true, description: Final total minus authorized/paid amount }
+            reference: { type: string, nullable: true }
+            reconciledAt: { type: string, format: date-time, nullable: true }
         currency: { type: string, minLength: 3, maxLength: 3 }
         deliveryAddressSnapshot: { type: object }
         deliverySlotId: { type: string, format: uuid, nullable: true }
@@ -1378,6 +1530,7 @@ components:
         confirmedAt: { type: string, format: date-time, nullable: true }
         deliveredAt: { type: string, format: date-time, nullable: true }
         cancelledAt: { type: string, format: date-time, nullable: true }
+        fulfilledAt: { type: string, format: date-time, nullable: true }
         cancellationReason: { type: string, nullable: true }
         items:
           type: array

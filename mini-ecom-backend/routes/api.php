@@ -1,6 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AccountController;
 use App\Http\Controllers\Api\V1\AddressController;
+use App\Http\Controllers\Api\V1\AdminCatalogController;
+use App\Http\Controllers\Api\V1\AdminFulfillmentController;
+use App\Http\Controllers\Api\V1\AdminOperationsController;
 use App\Http\Controllers\Api\V1\AdminOrderController;
 use App\Http\Controllers\Api\V1\AdminTelegramController;
 use App\Http\Controllers\Api\V1\AuthController;
@@ -64,6 +68,15 @@ Route::middleware('throttle:catalog')->group(function () {
 });
 
 Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])->group(function () {
+    Route::get('account/profile', [AccountController::class, 'profile']);
+    Route::patch('account/profile', [AccountController::class, 'updateProfile']);
+    Route::get('account/sessions', [AccountController::class, 'sessions']);
+    Route::post('account/logout-all', [AccountController::class, 'logoutAll']);
+    Route::post('account/change-password', [AccountController::class, 'changePassword']);
+    Route::get('account/notification-preferences', [AccountController::class, 'preferences']);
+    Route::patch('account/notification-preferences', [AccountController::class, 'updatePreferences']);
+    Route::post('account/telegram-link-challenge', [AccountController::class, 'createTelegramLinkChallenge']);
+    Route::post('account/close', [AccountController::class, 'close']);
     Route::get('addresses', [AddressController::class, 'index']);
     Route::post('addresses', [AddressController::class, 'store']);
     Route::get('addresses/{addressId}', [AddressController::class, 'show']);
@@ -87,6 +100,7 @@ Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])-
     Route::post('orders/{orderId}/payments/bakong', [BakongPaymentController::class, 'start'])->middleware('throttle:payment');
     Route::post('orders/{orderId}/payments/bakong/verify', [BakongPaymentController::class, 'verify'])->middleware('throttle:payment');
     Route::post('orders/{orderId}/restore-cart', [OrderController::class, 'restoreCart'])->middleware('throttle:checkout');
+    Route::post('orders/{orderId}/reorder', [OrderController::class, 'reorder'])->middleware('throttle:checkout');
     Route::post('orders/{orderId}/cancel', [OrderController::class, 'cancel']);
 
     Route::get('notifications', [NotificationController::class, 'index']);
@@ -99,8 +113,30 @@ Route::middleware(['auth:sanctum', 'account.active', 'admin', 'throttle:authenti
     Route::patch('products/{productId}', [ProductController::class, 'update']);
     Route::delete('products/{productId}', [ProductController::class, 'destroy']);
 
+    Route::get('admin/products', [AdminCatalogController::class, 'products']);
+    Route::post('admin/products', [AdminCatalogController::class, 'storeProduct']);
+    Route::get('admin/categories', [AdminCatalogController::class, 'categories']);
+    Route::post('admin/categories', [AdminCatalogController::class, 'storeCategory']);
+    Route::patch('admin/categories/{categoryId}', [AdminCatalogController::class, 'updateCategory']);
+    Route::post('admin/products/{productId}/images', [AdminCatalogController::class, 'storeImage']);
+    Route::post('admin/products/{productId}/images/{imageId}/primary', [AdminCatalogController::class, 'setPrimaryImage']);
+    Route::delete('admin/products/{productId}/images/{imageId}', [AdminCatalogController::class, 'destroyImage']);
+
+    Route::get('admin/inventory', [AdminOperationsController::class, 'inventory']);
+    Route::post('admin/inventory/{productId}/adjustments', [AdminOperationsController::class, 'adjustInventory']);
+    Route::get('admin/inventory/{productId}/adjustments', [AdminOperationsController::class, 'adjustments']);
+    Route::get('admin/delivery-slots', [AdminOperationsController::class, 'slots']);
+    Route::post('admin/delivery-slots', [AdminOperationsController::class, 'storeSlot']);
+    Route::patch('admin/delivery-slots/{slotId}', [AdminOperationsController::class, 'updateSlot']);
+    Route::get('admin/audit-events', [AdminOperationsController::class, 'auditEvents']);
+
     Route::post('admin/telegram/link', [AdminTelegramController::class, 'link']);
     Route::post('admin/orders/{orderId}/advance', [AdminOrderController::class, 'advance']);
+    Route::post('admin/orders/{orderId}/items/{itemId}/pick', [AdminFulfillmentController::class, 'pick']);
+    Route::post('admin/orders/{orderId}/items/{itemId}/substitutions', [AdminFulfillmentController::class, 'substitute']);
+    Route::post('admin/orders/{orderId}/items/{itemId}/unavailable', [AdminFulfillmentController::class, 'unavailable']);
+    Route::post('admin/orders/{orderId}/finalize', [AdminFulfillmentController::class, 'finalize']);
+    Route::post('admin/orders/{orderId}/reconcile', [AdminFulfillmentController::class, 'reconcile']);
 });
 
 // Telegram webhook — unauthenticated (Telegram cannot send a Bearer token). Authenticity is

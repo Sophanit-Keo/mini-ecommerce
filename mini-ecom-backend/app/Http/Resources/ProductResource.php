@@ -24,12 +24,12 @@ class ProductResource extends ProductSummaryResource
             'weightTolerancePct' => $this->weight_tolerance_pct,
             'minOrderQuantity' => $this->min_order_quantity,
             'maxOrderQuantity' => $this->max_order_quantity,
-            'images' => ProductImageResource::collection($this->whenLoaded('images')),
+            'images' => $this->whenLoaded('images', fn () => ProductImageResource::collection($this->images)->resolve($request)),
             'availableQuantity' => $this->whenLoaded(
                 'inventory',
                 fn () => $this->inventory?->quantity_available ?? '0.000',
             ),
-            'category' => CategoryResource::make($this->whenLoaded('category')),
+            'category' => $this->whenLoaded('category', fn () => CategoryResource::make($this->category)->resolve($request)),
         ];
     }
 }
