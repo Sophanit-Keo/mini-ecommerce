@@ -18,7 +18,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-#[Fillable(['email', 'password_hash', 'full_name', 'phone', 'role', 'status', 'email_verified_at', 'telegram_chat_id'])]
+#[Fillable(['email', 'password_hash', 'full_name', 'phone', 'role', 'status', 'email_verified_at', 'telegram_chat_id', 'notification_preferences'])]
 #[Hidden(['password_hash'])]
 class User extends Authenticatable implements MustVerifyEmailContract
 {
@@ -79,6 +79,12 @@ class User extends Authenticatable implements MustVerifyEmailContract
         return $this->hasMany(Notification::class);
     }
 
+    /** @return HasMany<TelegramLinkChallenge, $this> */
+    public function telegramLinkChallenges(): HasMany
+    {
+        return $this->hasMany(TelegramLinkChallenge::class);
+    }
+
     /** @return HasMany<WishlistItem, $this> */
     public function wishlistItems(): HasMany
     {
@@ -95,6 +101,7 @@ class User extends Authenticatable implements MustVerifyEmailContract
             'password_hash' => 'hashed',
             'role' => UserRole::class,
             'status' => UserStatus::class,
+            'notification_preferences' => 'array',
         ];
     }
 }

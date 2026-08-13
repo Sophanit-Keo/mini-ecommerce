@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Actions\Checkout\CreateCheckoutQuote;
 use App\Actions\Orders\ManageOrderReservation;
 use App\Actions\Orders\PlaceOrder;
+use App\Actions\Orders\RepeatOrderCart;
 use App\Actions\Orders\RestoreOrderCart;
 use App\Enums\CartStatus;
 use App\Enums\OrderStatus;
@@ -42,6 +43,7 @@ class OrderController extends Controller
         private readonly ManageOrderReservation $reservations,
         private readonly CreateCheckoutQuote $quotes,
         private readonly RestoreOrderCart $restoreOrderCart,
+        private readonly RepeatOrderCart $repeatOrderCart,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -142,6 +144,13 @@ class OrderController extends Controller
         );
 
         return CartResource::make($cart)->response()->setStatusCode(Response::HTTP_OK);
+    }
+
+    public function reorder(Request $request, string $orderId): CartResource
+    {
+        $order = $this->findForUser($request, $orderId, []);
+
+        return CartResource::make($this->repeatOrderCart->handle($request->user(), $order));
     }
 
     public function cancel(CancelOrderRequest $request, string $orderId): OrderResource

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AccountController;
 use App\Http\Controllers\Api\V1\AddressController;
 use App\Http\Controllers\Api\V1\AdminCatalogController;
 use App\Http\Controllers\Api\V1\AdminFulfillmentController;
@@ -67,6 +68,15 @@ Route::middleware('throttle:catalog')->group(function () {
 });
 
 Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])->group(function () {
+    Route::get('account/profile', [AccountController::class, 'profile']);
+    Route::patch('account/profile', [AccountController::class, 'updateProfile']);
+    Route::get('account/sessions', [AccountController::class, 'sessions']);
+    Route::post('account/logout-all', [AccountController::class, 'logoutAll']);
+    Route::post('account/change-password', [AccountController::class, 'changePassword']);
+    Route::get('account/notification-preferences', [AccountController::class, 'preferences']);
+    Route::patch('account/notification-preferences', [AccountController::class, 'updatePreferences']);
+    Route::post('account/telegram-link-challenge', [AccountController::class, 'createTelegramLinkChallenge']);
+    Route::post('account/close', [AccountController::class, 'close']);
     Route::get('addresses', [AddressController::class, 'index']);
     Route::post('addresses', [AddressController::class, 'store']);
     Route::get('addresses/{addressId}', [AddressController::class, 'show']);
@@ -90,6 +100,7 @@ Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])-
     Route::post('orders/{orderId}/payments/bakong', [BakongPaymentController::class, 'start'])->middleware('throttle:payment');
     Route::post('orders/{orderId}/payments/bakong/verify', [BakongPaymentController::class, 'verify'])->middleware('throttle:payment');
     Route::post('orders/{orderId}/restore-cart', [OrderController::class, 'restoreCart'])->middleware('throttle:checkout');
+    Route::post('orders/{orderId}/reorder', [OrderController::class, 'reorder'])->middleware('throttle:checkout');
     Route::post('orders/{orderId}/cancel', [OrderController::class, 'cancel']);
 
     Route::get('notifications', [NotificationController::class, 'index']);
