@@ -1,7 +1,9 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AddressController;
+use App\Http\Controllers\Api\V1\AdminCatalogController;
 use App\Http\Controllers\Api\V1\AdminFulfillmentController;
+use App\Http\Controllers\Api\V1\AdminOperationsController;
 use App\Http\Controllers\Api\V1\AdminOrderController;
 use App\Http\Controllers\Api\V1\AdminTelegramController;
 use App\Http\Controllers\Api\V1\AuthController;
@@ -99,6 +101,23 @@ Route::middleware(['auth:sanctum', 'account.active', 'throttle:authenticated'])-
 Route::middleware(['auth:sanctum', 'account.active', 'admin', 'throttle:authenticated'])->group(function () {
     Route::patch('products/{productId}', [ProductController::class, 'update']);
     Route::delete('products/{productId}', [ProductController::class, 'destroy']);
+
+    Route::get('admin/products', [AdminCatalogController::class, 'products']);
+    Route::post('admin/products', [AdminCatalogController::class, 'storeProduct']);
+    Route::get('admin/categories', [AdminCatalogController::class, 'categories']);
+    Route::post('admin/categories', [AdminCatalogController::class, 'storeCategory']);
+    Route::patch('admin/categories/{categoryId}', [AdminCatalogController::class, 'updateCategory']);
+    Route::post('admin/products/{productId}/images', [AdminCatalogController::class, 'storeImage']);
+    Route::post('admin/products/{productId}/images/{imageId}/primary', [AdminCatalogController::class, 'setPrimaryImage']);
+    Route::delete('admin/products/{productId}/images/{imageId}', [AdminCatalogController::class, 'destroyImage']);
+
+    Route::get('admin/inventory', [AdminOperationsController::class, 'inventory']);
+    Route::post('admin/inventory/{productId}/adjustments', [AdminOperationsController::class, 'adjustInventory']);
+    Route::get('admin/inventory/{productId}/adjustments', [AdminOperationsController::class, 'adjustments']);
+    Route::get('admin/delivery-slots', [AdminOperationsController::class, 'slots']);
+    Route::post('admin/delivery-slots', [AdminOperationsController::class, 'storeSlot']);
+    Route::patch('admin/delivery-slots/{slotId}', [AdminOperationsController::class, 'updateSlot']);
+    Route::get('admin/audit-events', [AdminOperationsController::class, 'auditEvents']);
 
     Route::post('admin/telegram/link', [AdminTelegramController::class, 'link']);
     Route::post('admin/orders/{orderId}/advance', [AdminOrderController::class, 'advance']);

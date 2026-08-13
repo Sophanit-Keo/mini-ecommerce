@@ -521,6 +521,39 @@ Response `200`: updated `Order`.
 
 ---
 
+## Release 3 administration operations
+
+All endpoints in this section are admin-only and use the existing `authenticated` rate limit. Every list has bounded `perPage` validation (`1`–`100`), and every mutation writes a sanitized immutable administration audit event.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET/POST /v1/admin/products` | List all products, including inactive rows, or create a product with its inventory row atomically. |
+| `GET/POST /v1/admin/categories` and `PATCH /v1/admin/categories/{categoryId}` | Manage categories without changing public active-only visibility. |
+| `POST /v1/admin/products/{productId}/images` | Add an image; the first image becomes primary automatically. |
+| `POST /v1/admin/products/{productId}/images/{imageId}/primary` | Select exactly one primary image. |
+| `DELETE /v1/admin/products/{productId}/images/{imageId}` | Delete a product image; if it was primary, the next positioned image becomes primary. |
+| `GET /v1/admin/inventory` | List live, reserved, available, and low-stock inventory. |
+| `POST /v1/admin/inventory/{productId}/adjustments` | Post an attributed ledger-backed adjustment; direct stock writes are not exposed. |
+| `GET /v1/admin/inventory/{productId}/adjustments` | Read a product’s paginated inventory ledger. |
+| `GET/POST /v1/admin/delivery-slots` and `PATCH /v1/admin/delivery-slots/{slotId}` | Manage slot lifecycle while preserving active-booking capacity and window safety. |
+| `GET /v1/admin/audit-events` | Read sanitized immutable administrative audit events. |
+
+### Product and category mutations
+
+`POST /v1/admin/products` requires a valid category UUID, SKU, name, slug, pricing shape, unit label, and minimum order quantity. Unit products require `price` and must not carry weight pricing; weight products require `pricePerKg` and `averageWeightKg` and must not carry `price`. Optional `initialStock`, `lowStockThreshold`, and `restockExpectedAt` create the inventory state in the same transaction. Existing `PATCH /v1/products/{productId}` and `DELETE /v1/products/{productId}` remain admin-only and are now audit-recorded.
+
+Category creation requires `name`, `slug`, and non-negative `position`; updates may set a parent but cannot create a parent/descendant cycle. Invalid parent UUIDs return field-level validation errors.
+
+### Media, inventory, delivery, and audit controls
+
+Image URLs are validated, each position is unique per product, and primary-image changes occur under a product row lock. Inventory adjustments require a non-zero `delta`, one of `restock`, `shrinkage`, `correction`, or `return`, and an optional note. The operation locks the inventory row, rejects a resulting on-hand quantity below existing reservations with `409 inventory-adjustment-would-oversell`, updates on-hand stock, and records the existing adjustment ledger plus an audit event.
+
+Delivery-slot creation/update validates chronological windows and non-negative money. Capacity cannot be reduced below `bookedCount` (`409 slot-capacity-below-bookings`), and a booked slot cannot be rescheduled (`409 slot-window-locked`). Administrators may deactivate a slot without destroying its historic booking relationship.
+
+Audit events include action, entity type/UUID, sanitized before/after context, actor UUID, request correlation ID when supplied, and timestamp. They intentionally omit credentials, access tokens, and raw provider responses.
+
+---
+
 ## Admin order fulfilment
 
 Admin-only. Requires `Authorization: Bearer {accessToken}` for a user with `role: admin`. Rate limit: `authenticated` (120/min). Fulfilment can also be driven from Telegram (see below) — both paths call the same underlying action, so they can never disagree about which transitions are legal.

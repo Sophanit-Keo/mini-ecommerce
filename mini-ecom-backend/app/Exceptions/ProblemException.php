@@ -457,4 +457,36 @@ class ProblemException extends RuntimeException
             array_filter(['reconciliationStatus' => $status]),
         );
     }
+
+    public static function inventoryAdjustmentWouldOversell(string $reserved): self
+    {
+        return new self(
+            'inventory-adjustment-would-oversell',
+            'Inventory adjustment would violate reservations',
+            409,
+            'The resulting on-hand quantity cannot be less than inventory already reserved for active orders.',
+            ['reservedQuantity' => $reserved],
+        );
+    }
+
+    public static function slotCapacityBelowBookings(int $bookedCount): self
+    {
+        return new self(
+            'slot-capacity-below-bookings',
+            'Delivery slot capacity is below active bookings',
+            409,
+            'Capacity cannot be reduced below the number of active bookings.',
+            ['bookedCount' => $bookedCount],
+        );
+    }
+
+    public static function slotWindowLocked(): self
+    {
+        return new self(
+            'slot-window-locked',
+            'Delivery slot window is locked',
+            409,
+            'A delivery window with active bookings cannot be rescheduled.',
+        );
+    }
 }

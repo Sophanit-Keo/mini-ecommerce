@@ -27,8 +27,9 @@ class CategoryResource extends JsonResource
             // Loaded with withCount() at the query, never per row — otherwise listing ten
             // categories costs eleven queries.
             'productCount' => $this->whenCounted('products'),
-            // Present only when tree=true or on the detail endpoint.
-            'children' => CategoryResource::collection($this->whenLoaded('children')),
+            // Present only when tree=true or on the detail endpoint. Resolve nested resources
+            // now so the public response can be safely persisted by every cache driver.
+            'children' => $this->whenLoaded('children', fn () => CategoryResource::collection($this->children)->resolve($request)),
         ];
     }
 }
