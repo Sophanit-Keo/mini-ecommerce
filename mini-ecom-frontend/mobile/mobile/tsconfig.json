@@ -1,0 +1,26 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    // No "baseUrl": it is not needed for the "@/*" alias below (TypeScript
+    // resolves "paths" relative to this file, and Expo's Metro resolver falls
+    // back to the project root), and setting it makes every bare import also
+    // resolve against the project root. That silently shadows npm packages
+    // with same-named local folders -- this app has app/, assets/,
+    // components/, constants/, context/, hooks/, scripts/ and server/.
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "references": [
+    {
+      "path": "../../lib/api-client-react"
+    }
+  ]
+}
