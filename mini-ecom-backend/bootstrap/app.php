@@ -120,8 +120,12 @@ $app = Application::configure(basePath: dirname(__DIR__))
     })->create();
 
 // The custom Vercel PHP runtime can bypass Laravel's deferred provider loading.
-// Register the view service explicitly so framework response and exception factories
-// remain available even though this application exposes an API rather than web pages.
+// Register the dispatcher before the view factory because views use the event system
+// for composers. This API still needs both services for framework responses and errors.
+if (! $app->bound('events')) {
+    $app->register(\Illuminate\Events\EventServiceProvider::class);
+}
+
 if (! $app->bound('view')) {
     $app->register(\Illuminate\View\ViewServiceProvider::class);
 }
