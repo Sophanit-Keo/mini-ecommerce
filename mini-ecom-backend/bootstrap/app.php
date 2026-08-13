@@ -119,6 +119,13 @@ $app = Application::configure(basePath: dirname(__DIR__))
         });
     })->create();
 
+// The custom Vercel PHP runtime can bypass Laravel's deferred provider loading.
+// Register the view service explicitly so framework response and exception factories
+// remain available even though this application exposes an API rather than web pages.
+if (! $app->bound('view')) {
+    $app->register(\Illuminate\View\ViewServiceProvider::class);
+}
+
 // Vercel's serverless filesystem is read-only everywhere except /tmp — Blade still needs
 // somewhere to write compiled view templates regardless of which cache/session driver is
 // configured, so the whole storage path is redirected there. VERCEL is set automatically by
