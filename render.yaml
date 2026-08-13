@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: mini-ecommerce-api
+    runtime: docker
+    repo: https://github.com/Sophanit-Keo/mini-ecommerce.git
+    branch: master
+    rootDir: mini-ecom-backend
+    plan: free
+    healthCheckPath: /up
+    autoDeployTrigger: commit
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: LOG_CHANNEL
+        value: stderr
+      - key: LOG_LEVEL
+        value: warning
+      - key: QUEUE_CONNECTION
+        value: sync
+      - key: CACHE_STORE
+        value: database
+      - key: SESSION_DRIVER
+        value: database
+      - key: SESSION_SECURE_COOKIE
+        value: "true"
+      - key: API_TRUSTED_PROXIES
+        value: "*"
+      - key: API_ACCESS_TOKEN_TTL
+        value: "900"
+      - key: API_REFRESH_TOKEN_TTL
+        value: "2592000"
+      - key: API_CATALOG_CACHE_TTL
+        value: "60"
+      - key: BAKONG_ENABLED
+        value: "false"
+      - key: APP_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: DB_CONNECTION
+        value: mysql
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "3306"
+      - key: DB_DATABASE
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: API_CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: API_FRONTEND_URL
+        sync: false
