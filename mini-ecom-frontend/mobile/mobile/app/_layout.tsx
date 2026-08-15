@@ -20,12 +20,14 @@ import { WishlistProvider } from '@/context/WishlistContext';
 import { NotificationsProvider } from '@/context/NotificationsContext';
 import { ToastProvider } from '@/components/Toast';
 
-// Set API base URL — Expo bundles need absolute URLs to reach the backend.
-// A bare hostname (assumed https) or a full http://ip:port URL for local LAN
-// dev both work — only default to https when no scheme is already present.
-if (process.env.EXPO_PUBLIC_DOMAIN) {
-  const domain = process.env.EXPO_PUBLIC_DOMAIN;
-  setBaseUrl(/^https?:\/\//.test(domain) ? domain : `https://${domain}`);
+// Expo bundles require an absolute API URL. The old EXPO_PUBLIC_DOMAIN preview
+// value pointed to an endpoint that returns 404, so deployments must provide this
+// explicit setting instead (for example, https://api.example.com or a LAN URL in dev).
+const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+if (apiBaseUrl) {
+  setBaseUrl(apiBaseUrl);
+} else {
+  console.warn('EXPO_PUBLIC_API_BASE_URL is not configured; API requests will remain disabled.');
 }
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.

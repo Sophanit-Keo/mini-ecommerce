@@ -7,9 +7,6 @@
     "preview": {
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "EXPO_PUBLIC_DOMAIN": "https://grocerly-api.vercel.app"
       }
     }
   }

@@ -213,7 +213,9 @@ async function downloadBundle(platform, timestamp) {
     'expo-router',
     'entry',
   );
-  const bundlePath = path.relative(workspaceRoot, entryPath);
+  // Metro serves modules relative to the Expo project, not the monorepo root.
+  // Using the workspace-relative path produced a 404 after the workspace was restored.
+  const bundlePath = path.relative(projectRoot, entryPath);
   const url = new URL(`http://localhost:8081/${bundlePath}.bundle`);
   url.searchParams.set('platform', platform);
   url.searchParams.set('dev', 'false');

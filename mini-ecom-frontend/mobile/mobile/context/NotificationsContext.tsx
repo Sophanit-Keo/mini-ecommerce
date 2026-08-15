@@ -16,14 +16,8 @@ import React, {
   useRef,
 } from 'react';
 import { Platform } from 'react-native';
-import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
-import {
-  useListNotifications,
-  useRegisterDevice,
-  useUnregisterDevice,
-} from '@workspace/api-client-react';
-import type { DeviceTokenInputPlatform } from '@workspace/api-client-react';
+import { useListNotifications } from '@workspace/api-client-react';
 import { useAuth } from '@/context/AuthContext';
 
 // Configure foreground notification behaviour. This is a module-scope side
@@ -52,74 +46,19 @@ const NotificationsContext = createContext<NotificationsContextType | null>(null
 
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  const { mutateAsync: registerDevice } = useRegisterDevice();
-  const { mutateAsync: unregisterDevice } = useUnregisterDevice();
-
-  const seenIdsRef = useRef<Set<number> | null>(null);
-  const pushTokenRef = useRef<string | null>(null);
-  const wasAuthedRef = useRef(false);
+  const seenIdsRef = useRef<Set<string> | null>(null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: notifications } = useListNotifications({
     query: { refetchInterval: POLL_INTERVAL_MS, enabled: !!user } as any,
   });
 
-  // Attempt remote-push registration once per sign-in. Best-effort: Expo Go
-  // has no EAS project id in dev, and remote push isn't available on Expo Go
-  // SDK 53+ Android anyway — the poller below is the working path in dev, so
-  // any failure here is swallowed and we carry on silently.
+  // The backend currently exposes notification polling, not device-token registration.
+  // Reset the local deduplication set on sign-out so a subsequent account does not inherit
+  // the previous account’s notification history.
   useEffect(() => {
-    if (!user || Platform.OS === 'web') return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        await Notifications.requestPermissionsAsync();
-
-        const projectId = Constants.expoConfig?.extra?.eas?.projectId;
-        if (!projectId) return;
-
-        const { data } = await Notifications.getExpoPushTokenAsync({ projectId });
-        if (cancelled) return;
-
-        pushTokenRef.current = data;
-        await registerDevice({
-          data: { token: data, platform: Platform.OS as DeviceTokenInputPlatform },
-        });
-      } catch {
-        // No EAS project id / no remote push support in Expo Go — ignore.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user, registerDevice]);
-
-  // Best-effort device unregistration on logout (only if we actually
-  // registered a token for this session).
-  useEffect(() => {
-    if (user) {
-      wasAuthedRef.current = true;
-      return;
-    }
-
-    if (wasAuthedRef.current && pushTokenRef.current) {
-      const token = pushTokenRef.current;
-      pushTokenRef.current = null;
-      unregisterDevice({
-        data: { token, platform: Platform.OS as DeviceTokenInputPlatform },
-      }).catch(() => {
-        // best-effort — nothing actionable if this fails
-      });
-    }
-
-    wasAuthedRef.current = false;
-    // Reseed on the next sign-in rather than firing a burst of whatever the
-    // next user's history happens to contain.
-    seenIdsRef.current = null;
-  }, [user, unregisterDevice]);
+    if (!user) seenIdsRef.current = null;
+  }, [user]);
 
   // Fire a local notification for every id we haven't already seen. The
   // first successful response after (re)authenticating only seeds the set —

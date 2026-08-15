@@ -48,11 +48,12 @@ export default function SearchScreen() {
   }, [query]);
 
   const { data: categories } = useListCategories();
-  const { data: searchData, isLoading: searching } = useListProducts(
-    { search: debouncedQuery, limit: 30 },
+  const { data: searchData, isLoading: searching } = useListProducts({
+    q: debouncedQuery,
+    limit: 30,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    { query: { enabled: debouncedQuery.length > 1 } as any },
-  );
+    query: { enabled: debouncedQuery.length > 1 } as any,
+  });
 
   const saveSearch = useCallback(async (term: string) => {
     const updated = [term, ...recentSearches.filter((s) => s !== term)].slice(0, 8);

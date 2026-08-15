@@ -23,8 +23,8 @@ import { useAuth } from '@/context/AuthContext';
  * `id` is the cart_items row id, needed for update/remove calls.
  */
 export interface CartItem {
-  id: number;
-  productId: number;
+  id: string;
+  productId: string;
   name: string;
   price: number;
   quantity: number;
@@ -38,7 +38,7 @@ export interface CartItem {
  * that pass product details (name/price/unit/image) don't need to change.
  */
 interface AddItemInput {
-  productId: number;
+  productId: string;
   quantity?: number;
   name?: string;
   price?: number;
@@ -50,8 +50,8 @@ interface CartContextType {
   items: CartItem[];
   isLoading: boolean;
   addItem: (item: AddItemInput) => void;
-  removeItem: (productId: number) => void;
-  updateQuantity: (productId: number, quantity: number) => void;
+  removeItem: (productId: string) => void;
+  updateQuantity: (productId: string, quantity: number) => void;
   clearCart: () => void;
   totalItems: number;
   subtotal: number;
@@ -118,7 +118,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   );
 
   const removeItem = useCallback(
-    (productId: number) => {
+    (productId: string) => {
       if (!requireAuth()) return;
       const item = items.find((i) => i.productId === productId);
       if (!item) return;
@@ -128,7 +128,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateQuantity = useCallback(
-    (productId: number, quantity: number) => {
+    (productId: string, quantity: number) => {
       if (!requireAuth()) return;
       const item = items.find((i) => i.productId === productId);
       if (!item) return;

@@ -58,6 +58,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
-    "expo-notifications": "^0.32.17"
+    "expo-notifications": "^0.32.17",
+    "expo-secure-store": "^57.0.1"
   }
 }
