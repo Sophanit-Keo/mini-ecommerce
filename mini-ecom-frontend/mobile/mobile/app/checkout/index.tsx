@@ -17,6 +17,8 @@ import * as Haptics from 'expo-haptics';
 import {
   useListAddresses,
   useCreateAddress,
+  useListDeliverySlots,
+  createCheckoutQuote,
   useCreateOrder,
 } from '@workspace/api-client-react';
 import { useColors } from '@/hooks/useColors';
@@ -31,14 +33,8 @@ const STEPS = ['Address', 'Delivery', 'Payment', 'Review'];
 
 const PAYMENT_METHODS = [
   { id: 'card', label: 'Credit / Debit Card', icon: 'card-outline' },
-  { id: 'cash', label: 'Cash on Delivery', icon: 'cash-outline' },
-  { id: 'apple_pay', label: 'Apple Pay', icon: 'logo-apple' },
-];
-
-const DELIVERY_SLOTS = [
-  { id: 'asap', label: 'ASAP (45–60 min)', icon: 'flash-outline' },
-  { id: 'afternoon', label: '12:00 – 15:00', icon: 'sunny-outline' },
-  { id: 'evening', label: '17:00 – 20:00', icon: 'moon-outline' },
+  { id: 'cash_on_delivery', label: 'Cash on Delivery', icon: 'cash-outline' },
+  { id: 'bakong', label: 'Bakong', icon: 'qr-code-outline' },
 ];
 
 /** Simple UUID v4 for idempotency keys — no crypto dependency needed */
@@ -57,8 +53,8 @@ export default function CheckoutScreen() {
   const toast = useToast();
 
   const [step, setStep] = useState(0);
-  const [selectedAddress, setSelectedAddress] = useState<number | null>(null);
-  const [selectedSlot, setSelectedSlot] = useState('asap');
+  const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState('card');
   const [promoCode, setPromoCode] = useState('');
   const [notes, setNotes] = useState('');
@@ -77,6 +73,10 @@ export default function CheckoutScreen() {
     query: { enabled: !!user } as any,
   });
   const createAddress = useCreateAddress();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: deliverySlots, isLoading: loadingDeliverySlots } = useListDeliverySlots({
+    query: { enabled: !!user } as any,
+  });
   // Pass the idempotency key at hook-init time so the backend can deduplicate
   // retries without creating a duplicate order.
   const createOrder = useCreateOrder({
@@ -101,18 +101,28 @@ export default function CheckoutScreen() {
   }
 
   const handlePlaceOrder = async () => {
-    if (!selectedAddress) return;
+    if (!selectedAddress || !selectedSlot) {
+      setPlaceError('Select a delivery address and an available delivery slot before placing the order.');
+      return;
+    }
     setPlacing(true);
     setPlaceError('');
     try {
+      // The backend owns pricing and stock validation. A short-lived quote token binds the
+      // selected address, slot, cart, and payment method before the idempotent order request.
+      const quote = await createCheckoutQuote({
+        addressId: selectedAddress,
+        deliverySlotId: selectedSlot,
+        paymentMethod,
+      });
       const result = await createOrder.mutateAsync({
         data: {
           addressId: selectedAddress,
-          items: items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
-          promoCode: promoCode.toUpperCase() || null,
+          deliverySlotId: selectedSlot,
           paymentMethod,
-          notes: notes || null,
-          deliveryTime: null,
+          quoteToken: quote.quoteToken,
+          customerNote: notes || null,
+          idempotencyKey: idempotencyKeyRef.current,
         },
       });
       // Cart cleared before navigation so it cannot be replayed accidentally
@@ -293,7 +303,11 @@ export default function CheckoutScreen() {
         {step === 1 && (
           <View style={styles.stepContent}>
             <Text style={[styles.stepTitle, { color: colors.foreground }]}>Choose Delivery Time</Text>
-            {DELIVERY_SLOTS.map((slot) => (
+            {loadingDeliverySlots ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : (deliverySlots ?? []).length === 0 ? (
+              <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No delivery slots are currently available.</Text>
+            ) : (deliverySlots ?? []).map((slot) => (
               <Pressable
                 key={slot.id}
                 style={[
@@ -306,9 +320,9 @@ export default function CheckoutScreen() {
                 ]}
                 onPress={() => setSelectedSlot(slot.id)}
               >
-                <Ionicons name={slot.icon as any} size={22} color={selectedSlot === slot.id ? colors.primary : colors.mutedForeground} />
+                <Ionicons name="time-outline" size={22} color={selectedSlot === slot.id ? colors.primary : colors.mutedForeground} />
                 <Text style={[styles.slotLabel, { color: selectedSlot === slot.id ? colors.primary : colors.foreground, fontFamily: selectedSlot === slot.id ? 'Inter_600SemiBold' : 'Inter_400Regular' }]}>
-                  {slot.label}
+                  {new Date(slot.startsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })} – {new Date(slot.endsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                 </Text>
                 {selectedSlot === slot.id && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
               </Pressable>
@@ -446,6 +460,7 @@ export default function CheckoutScreen() {
             ]}
             onPress={() => {
               if (step === 0 && !selectedAddress) return;
+              if (step === 1 && !selectedSlot) return;
               setStep(step + 1);
             }}
           >
@@ -542,6 +557,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   slotLabel: { flex: 1, fontSize: 15 },
+  emptyText: { fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center', paddingVertical: 18 },
   reviewCard: { padding: 14, borderWidth: 1, gap: 10 },
   reviewSectionTitle: { fontSize: 12, fontFamily: 'Inter_600SemiBold', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
   reviewItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

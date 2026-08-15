@@ -8,6 +8,7 @@ import React, {
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   authLogin,
@@ -48,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async function load() {
       try {
         const [storedToken, storedUser] = await Promise.all([
-          AsyncStorage.getItem(ACCESS_KEY),
+          SecureStore.getItemAsync(ACCESS_KEY),
           AsyncStorage.getItem(USER_KEY),
         ]);
         if (storedToken && storedUser) {
@@ -71,9 +72,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(result.accessToken);
     setUser(result.user);
     await Promise.all([
-      AsyncStorage.setItem(ACCESS_KEY, result.accessToken),
-      AsyncStorage.setItem(REFRESH_KEY, result.refreshToken),
+      SecureStore.setItemAsync(ACCESS_KEY, result.accessToken),
+      SecureStore.setItemAsync(REFRESH_KEY, result.refreshToken),
       AsyncStorage.setItem(USER_KEY, JSON.stringify(result.user)),
+      // Clear plaintext credentials left by older app versions after a successful sign-in.
+      AsyncStorage.removeItem(ACCESS_KEY),
+      AsyncStorage.removeItem(REFRESH_KEY),
     ]);
   }, []);
 
@@ -100,9 +104,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // user's cached cart, orders and notifications.
     queryClient.clear();
     await Promise.all([
+      SecureStore.deleteItemAsync(ACCESS_KEY),
+      SecureStore.deleteItemAsync(REFRESH_KEY),
+      AsyncStorage.removeItem(USER_KEY),
+      // Defensive migration cleanup for any plaintext credentials created by older app builds.
       AsyncStorage.removeItem(ACCESS_KEY),
       AsyncStorage.removeItem(REFRESH_KEY),
-      AsyncStorage.removeItem(USER_KEY),
     ]);
   }, [queryClient]);
 

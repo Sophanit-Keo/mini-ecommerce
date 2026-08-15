@@ -12,13 +12,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useQueryClient } from '@tanstack/react-query';
 import {
   useCancelOrder,
-  useCompleteOrder,
   useGetOrder,
-  getGetOrderQueryKey,
-  getListOrdersQueryKey,
 } from '@workspace/api-client-react';
 import { useColors } from '@/hooks/useColors';
 import { useCart } from '@/context/CartContext';
@@ -34,14 +30,9 @@ export default function OrderTrackingScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { addItem } = useCart();
-  const queryClient = useQueryClient();
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: order, isLoading, isError } = useGetOrder(Number(id), {
+  const { data: order, isLoading, isError } = useGetOrder(id, {
     query: {
-      // Keep polling through `delivered` — the customer still needs to
-      // confirm receipt from there. Only stop once a TERMINAL_STATUSES status
-      // (completed / cancelled / rejected) is reached.
       refetchInterval: (query: any) => {
         const status = query.state.data?.status;
         return status && TERMINAL_STATUSES.includes(status) ? false : 5000;
@@ -50,7 +41,6 @@ export default function OrderTrackingScreen() {
   });
 
   const { mutate: cancelOrder, isPending: isCancelling } = useCancelOrder();
-  const { mutate: completeOrder, isPending: isCompleting } = useCompleteOrder();
 
   const handleReorder = () => {
     if (!order) return;
@@ -80,38 +70,10 @@ export default function OrderTrackingScreen() {
           onPress: () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
             cancelOrder(
-              { id: Number(id) },
+              { id },
               {
                 onError: () => {
                   Alert.alert('Error', 'Could not cancel the order. Please try again.');
-                },
-              },
-            );
-          },
-        },
-      ],
-    );
-  };
-
-  const handleConfirmReceipt = () => {
-    Alert.alert(
-      'Confirm Receipt',
-      'Confirm that you have received this order?',
-      [
-        { text: 'Not yet', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: () => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            completeOrder(
-              { id: Number(id) },
-              {
-                onSuccess: () => {
-                  queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(Number(id)) });
-                  queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
-                },
-                onError: () => {
-                  Alert.alert('Error', 'Could not confirm receipt. Please try again.');
                 },
               },
             );
@@ -207,26 +169,6 @@ export default function OrderTrackingScreen() {
         {/* Delivery Map */}
         <DeliveryMap status={order.status} address={order.address} />
 
-        {/* Confirm receipt (delivered only — moves the order to completed) */}
-        {order.status === 'delivered' && (
-          <Pressable
-            style={[
-              styles.confirmBtn,
-              {
-                backgroundColor: colors.primary,
-                borderRadius: colors.radius,
-                opacity: isCompleting ? 0.5 : 1,
-              },
-            ]}
-            onPress={handleConfirmReceipt}
-            disabled={isCompleting}
-          >
-            <Ionicons name="checkmark-done-circle-outline" size={18} color="#FFF" />
-            <Text style={[styles.confirmBtnText, { color: '#FFF' }]}>
-              {isCompleting ? 'Confirming…' : 'Confirm Receipt'}
-            </Text>
-          </Pressable>
-        )}
 
         {/* View receipt (once the seller has approved and issued an invoice) */}
         {order.invoiceNumber != null && (
